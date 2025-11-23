@@ -1,5 +1,5 @@
 {
-  "name": "use-url-params",
+  "name": "@rdub/use-url-params",
   "version": "0.1.0",
   "description": "Type-safe URL query parameter management with minimal, human-readable encoding",
   "type": "module",
