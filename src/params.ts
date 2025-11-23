@@ -33,11 +33,9 @@ export function defStringParam(init: string): Param<string> {
  * - true → ?key (valueless)
  * - false → not present
  */
-export function boolParam(): Param<boolean> {
-  return {
-    encode: (value) => value ? '' : undefined,
-    decode: (encoded) => encoded !== undefined,
-  }
+export const boolParam: Param<boolean> = {
+  encode: (value) => value ? '' : undefined,
+  decode: (encoded) => encoded !== undefined,
 }
 
 /**
@@ -56,11 +54,9 @@ export function intParam(init: number): Param<number> {
  * - null → not present
  * - number → ?key=123
  */
-export function optIntParam(): Param<number | null> {
-  return {
-    encode: (value) => value === null ? undefined : value.toString(),
-    decode: (encoded) => encoded !== undefined ? parseInt(encoded, 10) : null,
-  }
+export const optIntParam: Param<number | null> = {
+  encode: (value) => value === null ? undefined : value.toString(),
+  decode: (encoded) => encoded !== undefined ? parseInt(encoded, 10) : null,
 }
 
 /**
