@@ -1,0 +1,72 @@
+name: Build dist branch (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      source_ref:
+        description: 'Source ref to build from (commit SHA, branch, or tag)'
+        required: false
+        type: string
+        default: 'main'
+      node_version:
+        description: 'Node.js version to use'
+        required: false
+        type: string
+        default: '20'
+      pnpm_version:
+        description: 'pnpm version to use'
+        required: false
+        type: string
+        default: '9'
+      build_command:
+        description: 'Build command to run'
+        required: false
+        type: string
+        default: 'pnpm run build'
+      dist_branch:
+        description: 'Name of dist branch'
+        required: false
+        type: string
+        default: 'dist'
+
+jobs:
+  build-dist:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+
+      - name: Get source commit SHA
+        id: source
+        run: echo "sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Fetch build script from dist branch
+        run: |
+          git fetch origin ${{ inputs.dist_branch }}
+          git checkout origin/${{ inputs.dist_branch }} -- scripts/build-dist.sh
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ inputs.pnpm_version }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: ${{ inputs.build_command }}
+
+      - name: Build dist branch
+        run: ./scripts/build-dist.sh ${{ steps.source.outputs.sha }}
+        env:
+          DIST_BRANCH: ${{ inputs.dist_branch }}
+
+      - name: Push dist branch
+        run: git push origin ${{ inputs.dist_branch }} --force-with-lease

@@ -2,14 +2,15 @@
 set -e
 
 SOURCE_SHA="${1:-$(git rev-parse HEAD)}"
+DIST_BRANCH="${DIST_BRANCH:-dist}"
 
-echo "Building dist from source commit: $SOURCE_SHA"
+echo "Building $DIST_BRANCH from source commit: $SOURCE_SHA"
 
 # Checkout or create dist branch
-if git fetch origin dist:dist 2>/dev/null; then
-  git checkout dist
+if git fetch origin "$DIST_BRANCH:$DIST_BRANCH" 2>/dev/null; then
+  git checkout "$DIST_BRANCH"
 else
-  git checkout --orphan dist
+  git checkout --orphan "$DIST_BRANCH"
 fi
 
 # Configure git
@@ -33,9 +34,9 @@ rmdir dist 2>/dev/null || true
 if [ -f package.json.dist ]; then
   mv package.json.dist package.json
 else
-  echo "ERROR: No package.json found on dist branch"
-  echo "This script requires an existing dist branch with a package.json"
-  echo "For initial dist branch setup, manually create package.json with correct paths:"
+  echo "ERROR: No package.json found on $DIST_BRANCH branch"
+  echo "This script requires an existing $DIST_BRANCH branch with a package.json"
+  echo "For initial $DIST_BRANCH branch setup, manually create package.json with correct paths:"
   echo "  main: ./index.cjs (not ./dist/index.cjs)"
   echo "  module: ./index.js (not ./dist/index.js)"
   exit 1
@@ -47,11 +48,11 @@ git add -A
 # Create commit
 if git rev-parse --verify HEAD~0 >/dev/null 2>&1; then
   # dist branch exists, create merge commit
-  git commit -m "Build dist from $SOURCE_SHA" || true
-  git merge --no-ff -m "Merge built dist from main@$SOURCE_SHA" "$SOURCE_SHA" -s ours || true
+  git commit -m "Build $DIST_BRANCH from $SOURCE_SHA" || true
+  git merge --no-ff -m "Merge built $DIST_BRANCH from main@$SOURCE_SHA" "$SOURCE_SHA" -s ours || true
 else
   # First dist commit
-  git commit -m "Initial dist build from $SOURCE_SHA"
+  git commit -m "Initial $DIST_BRANCH build from $SOURCE_SHA"
 fi
 
-echo "Dist branch built successfully"
+echo "$DIST_BRANCH branch built successfully"

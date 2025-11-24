@@ -8,21 +8,7 @@ on:
         default: 'main'
 jobs:
   build-dist:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.source_ref }}
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'pnpm'
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm run build
-      - run: ./scripts/build-dist.sh
-      - run: git push origin dist --force-with-lease
+    uses: ./.github/workflows/build-dist-reusable.yml
+    with:
+      source_ref: ${{ inputs.source_ref }}
+      pnpm_version: '10'
