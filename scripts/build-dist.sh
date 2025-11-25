@@ -6,6 +6,9 @@ DIST_BRANCH="${DIST_BRANCH:-dist}"
 
 echo "Building $DIST_BRANCH from source commit: $SOURCE_SHA"
 
+# Remove node_modules before checkout (it would conflict)
+rm -rf node_modules
+
 # Checkout or create dist branch
 if git fetch origin "$DIST_BRANCH:$DIST_BRANCH" 2>/dev/null; then
   git checkout "$DIST_BRANCH"
