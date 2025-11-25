@@ -7,6 +7,10 @@ on:
         description: 'Source ref to build from (commit SHA, branch, or tag)'
         required: false
         default: 'main'
+      dist_branch:
+        description: 'Name of dist branch'
+        required: false
+        default: 'dist'
 
 jobs:
   build-dist:
@@ -17,3 +21,4 @@ jobs:
       - uses: runsascoded/gh-pnpm-dist@main
         with:
           source_ref: ${{ inputs.source_ref }}
+          dist_branch: ${{ inputs.dist_branch }}
