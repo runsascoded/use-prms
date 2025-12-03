@@ -79,8 +79,15 @@ export function useUrlParam<T>(
     getServerSnapshot
   )
 
-  // Decode current value from URL
-  const value = param.decode(urlParams[key])
+  // Memoize decoded value based on encoded string
+  // If the URL param string hasn't changed, return the same object reference
+  const encoded = urlParams[key]
+  const cacheRef = useRef<{ encoded: typeof encoded; decoded: T } | null>(null)
+
+  if (cacheRef.current === null || cacheRef.current.encoded !== encoded) {
+    cacheRef.current = { encoded, decoded: param.decode(encoded) }
+  }
+  const value = cacheRef.current.decoded
 
   // Update URL when value changes
   const setValue = useCallback(
