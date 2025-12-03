@@ -79,13 +79,14 @@ export function useUrlParam<T>(
     getServerSnapshot
   )
 
-  // Memoize decoded value based on encoded string
-  // If the URL param string hasn't changed, return the same object reference
+  // Memoize decoded value based on encoded string AND param identity
+  // Re-decode if either the URL param string changes OR the param object changes
+  // (e.g., deviceIdsParam depends on devices array which loads asynchronously)
   const encoded = urlParams[key]
-  const cacheRef = useRef<{ encoded: typeof encoded; decoded: T } | null>(null)
+  const cacheRef = useRef<{ encoded: typeof encoded; param: Param<T>; decoded: T } | null>(null)
 
-  if (cacheRef.current === null || cacheRef.current.encoded !== encoded) {
-    cacheRef.current = { encoded, decoded: param.decode(encoded) }
+  if (cacheRef.current === null || cacheRef.current.encoded !== encoded || cacheRef.current.param !== param) {
+    cacheRef.current = { encoded, param, decoded: param.decode(encoded) }
   }
   const value = cacheRef.current.decoded
 
