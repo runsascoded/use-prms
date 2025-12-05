@@ -1,16 +1,6 @@
 name: Build dist branch
 on:
   workflow_dispatch:
-    inputs:
-      source_ref:
-        description: 'Source ref to build from (commit SHA, branch, or tag)'
-        default: 'main'
 jobs:
   build-dist:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: runsascoded/gh-pnpm-dist@v1
-        with:
-          source_ref: ${{ inputs.source_ref }}
+    uses: runsascoded/gh-pnpm-dist/.github/workflows/build-dist.yml@v1
