@@ -187,3 +187,88 @@ export function paginationParam(
     },
   }
 }
+
+/**
+ * Code mapping for enum values - maps full values to short codes for compact URLs.
+ * Can be specified as:
+ * - Array of [value, code] tuples: [['Rides', 'r'], ['Minutes', 'm']]
+ * - Object mapping values to codes: { Rides: 'r', Minutes: 'm' }
+ */
+export type CodeMap<T extends string> = [T, string][] | Record<T, string>
+
+function normalizeCodeMap<T extends string>(codeMap: CodeMap<T>): [T, string][] {
+  if (Array.isArray(codeMap)) return codeMap
+  return Object.entries(codeMap) as [T, string][]
+}
+
+/**
+ * Single-value enum parameter with short code mapping.
+ * Maps full enum values to abbreviated codes for compact URLs.
+ * Omitted from URL when equal to default.
+ *
+ * @example
+ * // ?y=r for "Rides", ?y=m for "Minutes", omitted for default "Rides"
+ * codeParam('Rides', [['Rides', 'r'], ['Minutes', 'm']])
+ * // or with object syntax:
+ * codeParam('Rides', { Rides: 'r', Minutes: 'm' })
+ */
+export function codeParam<T extends string>(
+  init: T,
+  codeMap: CodeMap<T>,
+): Param<T> {
+  const entries = normalizeCodeMap(codeMap)
+  const valueToCode = new Map(entries)
+  const codeToValue = new Map(entries.map(([v, c]) => [c, v]))
+
+  return {
+    encode: (value) => {
+      if (value === init) return undefined
+      return valueToCode.get(value) ?? value
+    },
+    decode: (encoded) => {
+      if (encoded === undefined) return init
+      return codeToValue.get(encoded) ?? init
+    },
+  }
+}
+
+/**
+ * Multi-value parameter with short code mapping.
+ * Maps full values to abbreviated codes for compact URLs.
+ * Omitted from URL when all values are selected.
+ *
+ * @param allValues - Array of all possible values (used to detect "all selected")
+ * @param codeMap - Mapping from values to short codes
+ * @param separator - Delimiter between codes (default: '' for most compact URLs)
+ *
+ * @example
+ * // Regions: ?r=nj for NYC+JC, ?r=njh or omitted for all three
+ * codesParam(['NYC', 'JC', 'HOB'], [['NYC', 'n'], ['JC', 'j'], ['HOB', 'h']])
+ * // or with object syntax and custom separator:
+ * codesParam(['NYC', 'JC', 'HOB'], { NYC: 'n', JC: 'j', HOB: 'h' }, ',')
+ */
+export function codesParam<T extends string>(
+  allValues: readonly T[],
+  codeMap: CodeMap<T>,
+  separator: string = '',
+): Param<T[]> {
+  const entries = normalizeCodeMap(codeMap)
+  const valueToCode = new Map(entries)
+  const codeToValue = new Map(entries.map(([v, c]) => [c, v]))
+
+  return {
+    encode: (values) => {
+      // Omit when all values selected
+      if (values.length === allValues.length && allValues.every(v => values.includes(v))) {
+        return undefined
+      }
+      return values.map(v => valueToCode.get(v) ?? v).join(separator)
+    },
+    decode: (encoded) => {
+      if (encoded === undefined) return [...allValues]
+      if (encoded === '') return []
+      const codes = separator ? encoded.split(separator) : encoded.split('')
+      return codes.map(c => codeToValue.get(c)).filter((v): v is T => v !== undefined)
+    },
+  }
+}
