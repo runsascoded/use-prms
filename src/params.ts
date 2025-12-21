@@ -146,3 +146,44 @@ export function numberArrayParam(init: number[] = []): Param<number[]> {
     },
   }
 }
+
+/**
+ * Pagination parameter combining offset and page size.
+ * Uses space (which encodes as + in URLs) as delimiter.
+ *
+ * Encoding rules:
+ * - offset=0, pageSize=default → not present (undefined)
+ * - offset=0, pageSize=custom → " pageSize" (e.g., " 20" → +20 in URL)
+ * - offset>0, pageSize=default → "offset" (e.g., "100")
+ * - offset>0, pageSize=custom → "offset pageSize" (e.g., "100 20" → 100+20 in URL)
+ *
+ * @param defaultPageSize - The default page size (omitted from URL when used)
+ * @param validPageSizes - Optional array of valid page sizes for validation
+ */
+export type Pagination = { offset: number; pageSize: number }
+
+export function paginationParam(
+  defaultPageSize: number,
+  validPageSizes?: readonly number[],
+): Param<Pagination> {
+  return {
+    encode: ({ offset, pageSize }) => {
+      if (offset === 0 && pageSize === defaultPageSize) return undefined
+      if (offset === 0) return ` ${pageSize}` // Space prefix → +pageSize in URL
+      if (pageSize === defaultPageSize) return String(offset)
+      return `${offset} ${pageSize}` // Space encodes as + in URL
+    },
+    decode: (encoded) => {
+      if (!encoded) return { offset: 0, pageSize: defaultPageSize }
+      const parts = encoded.split(' ') // URL + decodes to space
+      // Handle " pageSize" case (offset 0 with custom page size)
+      const offset = parts[0] === '' ? 0 : parseInt(parts[0], 10) || 0
+      let pageSize = parts[1] ? parseInt(parts[1], 10) : defaultPageSize
+      // Validate page size if validation array provided
+      if (validPageSizes && !validPageSizes.includes(pageSize)) {
+        pageSize = defaultPageSize
+      }
+      return { offset, pageSize }
+    },
+  }
+}
