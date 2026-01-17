@@ -1,6 +1,8 @@
 name: Build dist branch
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 jobs:
   build-dist:
-    uses: runsascoded/gh-pnpm-dist/.github/workflows/build-dist.yml@v1
+    uses: runsascoded/npm-dist/.github/workflows/build-dist.yml@v1
