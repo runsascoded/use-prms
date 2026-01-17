@@ -40,7 +40,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/runsascoded/use-url-params"
+    "url": "https://github.com/runsascoded/use-params"
   },
   "devDependencies": {
     "@types/react": "^18.3.18",
