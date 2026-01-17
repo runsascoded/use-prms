@@ -1,4 +1,4 @@
-# use-params
+# use-prms
 
 Type-safe URL query parameter management with minimal, human-readable encoding.
 
@@ -16,15 +16,15 @@ Type-safe URL query parameter management with minimal, human-readable encoding.
 ## Installation
 
 ```bash
-npm install use-params
+npm install use-prms
 # or
-pnpm add use-params
+pnpm add use-prms
 ```
 
 ## Quick Start
 
 ```typescript
-import { useUrlParam, boolParam, stringParam, intParam } from 'use-params'
+import { useUrlParam, boolParam, stringParam, intParam } from 'use-prms'
 
 function MyComponent() {
   const [zoom, setZoom] = useUrlParam('z', boolParam)
@@ -90,7 +90,7 @@ const [ids, setIds] = useUrlParam('ids', numberArrayParam([]))
 
 ### Multi-value Arrays (repeated keys)
 ```typescript
-import { useMultiUrlParam, multiStringParam, multiIntParam } from 'use-params'
+import { useMultiUrlParam, multiStringParam, multiIntParam } from 'use-prms'
 
 const [tags, setTags] = useMultiUrlParam('tag', multiStringParam())
 // ?tag=foo&tag=bar&tag=baz → ["foo", "bar", "baz"]
@@ -133,7 +133,7 @@ const [page, setPage] = useUrlParam('p', paginationParam(20))
 Create your own param encoders/decoders:
 
 ```typescript
-import type { Param } from 'use-params'
+import type { Param } from 'use-prms'
 
 // Example: Compact date encoding (YYMMDD)
 const dateParam: Param<Date> = {
@@ -161,7 +161,7 @@ const [date, setDate] = useUrlParam('d', dateParam)
 Use `useUrlParams()` to update multiple parameters atomically:
 
 ```typescript
-import { useUrlParams, intParam, boolParam } from 'use-params'
+import { useUrlParams, intParam, boolParam } from 'use-prms'
 
 const { values, setValues } = useUrlParams({
   page: intParam(1),
@@ -192,7 +192,7 @@ setDevices(['gym', 'bedroom'])
 Use the core utilities without React:
 
 ```typescript
-import { boolParam, serializeParams, parseParams } from 'use-params'
+import { boolParam, serializeParams, parseParams } from 'use-prms'
 
 // Encode
 const params = { z: boolParam.encode(true), d: 'gym' }
@@ -209,7 +209,7 @@ Use hash fragment (`#key=value`) instead of query string (`?key=value`):
 
 ```typescript
 // Just change the import path
-import { useUrlParam, boolParam } from 'use-params/hash'
+import { useUrlParam, boolParam } from 'use-prms/hash'
 
 const [zoom, setZoom] = useUrlParam('z', boolParam)
 // URL: https://example.com/#z (instead of ?z)
@@ -303,7 +303,7 @@ type MultiParam<T> = {
 
 ## Examples
 
-Projects using `use-params`:
+Projects using `use-prms`:
 
 - [runsascoded/awair] – Air quality dashboard with URL-persisted chart settings
 

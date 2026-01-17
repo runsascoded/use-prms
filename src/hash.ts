@@ -7,10 +7,10 @@
  * Usage:
  * ```typescript
  * // Instead of:
- * import { useUrlParam, stringParam } from 'use-params'
+ * import { useUrlParam, stringParam } from 'use-prms'
  *
  * // Use:
- * import { useUrlParam, stringParam } from 'use-params/hash'
+ * import { useUrlParam, stringParam } from 'use-prms/hash'
  *
  * // Same API, but reads/writes to URL hash instead of query string
  * // e.g., #name=foo instead of ?name=foo

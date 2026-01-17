@@ -1,5 +1,5 @@
 {
-  "name": "use-params",
+  "name": "use-prms",
   "version": "0.2.0",
   "description": "Type-safe URL query parameter management with minimal, human-readable encoding",
   "type": "module",
@@ -40,7 +40,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/runsascoded/use-params"
+    "url": "https://github.com/runsascoded/use-prms"
   },
   "devDependencies": {
     "@types/react": "^18.3.18",
