@@ -1,6 +1,6 @@
 {
-  "name": "use-params",
-  "version": "0.2.0-dist.ae5a95a",
+  "name": "use-prms",
+  "version": "0.2.0-dist.c9e8176",
   "main": "./index.cjs",
   "module": "./index.js",
   "types": "./index.d.ts",
@@ -31,7 +31,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/runsascoded/use-params"
+    "url": "https://github.com/runsascoded/use-prms"
   },
   "author": "Ryan Williams",
   "license": "MIT"
