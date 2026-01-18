@@ -45,7 +45,11 @@ export const boolParam: Param<boolean> = {
 export function intParam(init: number): Param<number> {
   return {
     encode: (value) => value === init ? undefined : value.toString(),
-    decode: (encoded) => encoded !== undefined ? parseInt(encoded, 10) : init,
+    decode: (encoded) => {
+      if (encoded === undefined || encoded === '') return init
+      const parsed = parseInt(encoded, 10)
+      return isNaN(parsed) ? init : parsed
+    },
   }
 }
 
@@ -56,7 +60,11 @@ export function intParam(init: number): Param<number> {
  */
 export const optIntParam: Param<number | null> = {
   encode: (value) => value === null ? undefined : value.toString(),
-  decode: (encoded) => encoded !== undefined ? parseInt(encoded, 10) : null,
+  decode: (encoded) => {
+    if (encoded === undefined || encoded === '') return null
+    const parsed = parseInt(encoded, 10)
+    return isNaN(parsed) ? null : parsed
+  },
 }
 
 /**
@@ -66,7 +74,11 @@ export const optIntParam: Param<number | null> = {
 export function floatParam(init: number): Param<number> {
   return {
     encode: (value) => value === init ? undefined : value.toString(),
-    decode: (encoded) => encoded !== undefined ? parseFloat(encoded) : init,
+    decode: (encoded) => {
+      if (encoded === undefined || encoded === '') return init
+      const parsed = parseFloat(encoded)
+      return isNaN(parsed) ? init : parsed
+    },
   }
 }
 
