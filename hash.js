@@ -28,6 +28,25 @@ function serializeMultiParams(params) {
   }
   return result;
 }
+var LOCATION_CHANGE_EVENT = "use-prms:locationchange";
+var historyPatched = false;
+function patchHistoryApi() {
+  if (typeof window === "undefined" || historyPatched) return;
+  historyPatched = true;
+  const originalPushState = history.pushState.bind(history);
+  const originalReplaceState = history.replaceState.bind(history);
+  history.pushState = function(state, title, url) {
+    originalPushState(state, title, url);
+    window.dispatchEvent(new CustomEvent(LOCATION_CHANGE_EVENT));
+    window.dispatchEvent(new PopStateEvent("popstate", { state }));
+  };
+  history.replaceState = function(state, title, url) {
+    originalReplaceState(state, title, url);
+    window.dispatchEvent(new CustomEvent(LOCATION_CHANGE_EVENT));
+    window.dispatchEvent(new PopStateEvent("popstate", { state }));
+  };
+}
+patchHistoryApi();
 var queryStrategy = {
   getRaw() {
     if (typeof window === "undefined") return "";
@@ -45,7 +64,11 @@ var queryStrategy = {
     if (typeof window === "undefined") return () => {
     };
     window.addEventListener("popstate", callback);
-    return () => window.removeEventListener("popstate", callback);
+    window.addEventListener(LOCATION_CHANGE_EVENT, callback);
+    return () => {
+      window.removeEventListener("popstate", callback);
+      window.removeEventListener(LOCATION_CHANGE_EVENT, callback);
+    };
   }
 };
 var hashStrategy = {
@@ -68,12 +91,28 @@ var hashStrategy = {
     };
     window.addEventListener("hashchange", callback);
     window.addEventListener("popstate", callback);
+    window.addEventListener(LOCATION_CHANGE_EVENT, callback);
     return () => {
       window.removeEventListener("hashchange", callback);
       window.removeEventListener("popstate", callback);
+      window.removeEventListener(LOCATION_CHANGE_EVENT, callback);
     };
   }
 };
+function notifyLocationChange() {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(LOCATION_CHANGE_EVENT));
+}
+function clearParams(strategy = "query") {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  if (strategy === "hash") {
+    url.hash = "";
+  } else {
+    url.search = "";
+  }
+  window.history.replaceState({}, "", url.toString());
+}
 var defaultStrategy = queryStrategy;
 function getDefaultStrategy() {
   return defaultStrategy;
@@ -102,17 +141,29 @@ var boolParam = {
 function intParam(init) {
   return {
     encode: (value) => value === init ? void 0 : value.toString(),
-    decode: (encoded) => encoded !== void 0 ? parseInt(encoded, 10) : init
+    decode: (encoded) => {
+      if (encoded === void 0 || encoded === "") return init;
+      const parsed = parseInt(encoded, 10);
+      return isNaN(parsed) ? init : parsed;
+    }
   };
 }
 var optIntParam = {
   encode: (value) => value === null ? void 0 : value.toString(),
-  decode: (encoded) => encoded !== void 0 ? parseInt(encoded, 10) : null
+  decode: (encoded) => {
+    if (encoded === void 0 || encoded === "") return null;
+    const parsed = parseInt(encoded, 10);
+    return isNaN(parsed) ? null : parsed;
+  }
 };
 function floatParam(init) {
   return {
     encode: (value) => value === init ? void 0 : value.toString(),
-    decode: (encoded) => encoded !== void 0 ? parseFloat(encoded) : init
+    decode: (encoded) => {
+      if (encoded === void 0 || encoded === "") return init;
+      const parsed = parseFloat(encoded);
+      return isNaN(parsed) ? init : parsed;
+    }
   };
 }
 function enumParam(init, values) {
@@ -470,6 +521,6 @@ function updateUrl(params, push = false) {
 // src/hash.ts
 setDefaultStrategy(hashStrategy);
 
-export { boolParam, codeParam, codesParam, defStringParam, enumParam, floatParam, getCurrentParams, getDefaultStrategy, hashStrategy, intParam, multiFloatParam, multiIntParam, multiStringParam, numberArrayParam, optIntParam, paginationParam, parseMultiParams, parseParams, queryStrategy, serializeMultiParams, serializeParams, setDefaultStrategy, stringParam, stringsParam, updateUrl, useMultiUrlParam, useMultiUrlParams, useUrlParam, useUrlParams };
+export { boolParam, clearParams, codeParam, codesParam, defStringParam, enumParam, floatParam, getCurrentParams, getDefaultStrategy, hashStrategy, intParam, multiFloatParam, multiIntParam, multiStringParam, notifyLocationChange, numberArrayParam, optIntParam, paginationParam, parseMultiParams, parseParams, queryStrategy, serializeMultiParams, serializeParams, setDefaultStrategy, stringParam, stringsParam, updateUrl, useMultiUrlParam, useMultiUrlParams, useUrlParam, useUrlParams };
 //# sourceMappingURL=hash.js.map
 //# sourceMappingURL=hash.js.map

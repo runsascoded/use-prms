@@ -42,6 +42,17 @@ declare const queryStrategy: LocationStrategy;
  */
 declare const hashStrategy: LocationStrategy;
 /**
+ * Notify all use-prms hooks that the URL has changed.
+ * Note: With the History API patch, this is rarely needed since pushState/replaceState
+ * automatically trigger notifications. Use this for edge cases like direct location assignment.
+ */
+declare function notifyLocationChange(): void;
+/**
+ * Clear all URL params.
+ * @param strategy - Which location to clear (query or hash), defaults to query
+ */
+declare function clearParams(strategy?: 'query' | 'hash'): void;
+/**
  * Get the current default location strategy
  */
 declare function getDefaultStrategy(): LocationStrategy;
@@ -338,4 +349,4 @@ declare function getCurrentParams(): Record<string, Encoded>;
  */
 declare function updateUrl(params: Record<string, Encoded>, push?: boolean): void;
 
-export { type CodeMap, type Encoded, type LocationStrategy, type MultiEncoded, type MultiParam, type Pagination, type Param, boolParam, codeParam, codesParam, defStringParam, enumParam, floatParam, getCurrentParams, getDefaultStrategy, hashStrategy, intParam, multiFloatParam, multiIntParam, multiStringParam, numberArrayParam, optIntParam, paginationParam, parseMultiParams, parseParams, queryStrategy, serializeMultiParams, serializeParams, setDefaultStrategy, stringParam, stringsParam, updateUrl, useMultiUrlParam, useMultiUrlParams, useUrlParam, useUrlParams };
+export { type CodeMap, type Encoded, type LocationStrategy, type MultiEncoded, type MultiParam, type Pagination, type Param, boolParam, clearParams, codeParam, codesParam, defStringParam, enumParam, floatParam, getCurrentParams, getDefaultStrategy, hashStrategy, intParam, multiFloatParam, multiIntParam, multiStringParam, notifyLocationChange, numberArrayParam, optIntParam, paginationParam, parseMultiParams, parseParams, queryStrategy, serializeMultiParams, serializeParams, setDefaultStrategy, stringParam, stringsParam, updateUrl, useMultiUrlParam, useMultiUrlParams, useUrlParam, useUrlParams };
