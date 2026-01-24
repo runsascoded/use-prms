@@ -61,7 +61,7 @@ jobs:
 
       - name: Run E2E tests
         working-directory: ./site
-        run: pnpm run test
+        run: pnpm run e2e
 
       - name: Upload test report
         if: failure()
