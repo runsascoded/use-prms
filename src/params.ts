@@ -68,21 +68,6 @@ export const optIntParam: Param<number | null> = {
 }
 
 /**
- * Float parameter with default.
- * Omitted from URL when equal to default.
- */
-export function floatParam(init: number): Param<number> {
-  return {
-    encode: (value) => value === init ? undefined : value.toString(),
-    decode: (encoded) => {
-      if (encoded === undefined || encoded === '') return init
-      const parsed = parseFloat(encoded)
-      return isNaN(parsed) ? init : parsed
-    },
-  }
-}
-
-/**
  * Enum parameter with validation.
  * Omitted from URL when equal to default.
  * Invalid values fall back to default with console warning.

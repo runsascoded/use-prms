@@ -4,7 +4,6 @@ import {
   stringParam,
   defStringParam,
   intParam,
-  floatParam,
   optIntParam,
   enumParam,
   stringsParam,
@@ -13,6 +12,7 @@ import {
   codeParam,
   codesParam,
 } from './params.js'
+import { floatParam } from './float.js'
 
 describe('boolParam', () => {
   it('encodes true as empty string', () => {
@@ -114,24 +114,80 @@ describe('intParam', () => {
 })
 
 describe('floatParam', () => {
-  it('encodes non-default value', () => {
-    const param = floatParam(0)
-    expect(param.encode(3.14)).toBe('3.14')
+  describe('string encoding', () => {
+    it('encodes non-default value', () => {
+      const param = floatParam({ default: 0, encoding: 'string' })
+      expect(param.encode(3.14)).toBe('3.14')
+    })
+
+    it('encodes default value as undefined', () => {
+      const param = floatParam({ default: 1.5, encoding: 'string' })
+      expect(param.encode(1.5)).toBeUndefined()
+    })
+
+    it('decodes string to float', () => {
+      const param = floatParam({ default: 0, encoding: 'string' })
+      expect(param.decode('3.14')).toBeCloseTo(3.14)
+    })
+
+    it('decodes undefined as default', () => {
+      const param = floatParam({ default: 1.5, encoding: 'string' })
+      expect(param.decode(undefined)).toBe(1.5)
+    })
+
+    it('truncates with decimals option', () => {
+      const param = floatParam({ default: 0, encoding: 'string', decimals: 2 })
+      expect(param.encode(3.14159)).toBe('3.14')
+    })
   })
 
-  it('encodes default value as undefined', () => {
-    const param = floatParam(1.5)
-    expect(param.encode(1.5)).toBeUndefined()
+  describe('base64 encoding (default)', () => {
+    it('encodes to base64 by default', () => {
+      const param = floatParam(0)
+      const encoded = param.encode(Math.PI)
+      expect(encoded).toBeDefined()
+      expect(encoded).not.toBe(Math.PI.toString())
+      expect(encoded!.length).toBe(11) // lossless: 8 bytes = 11 base64 chars
+    })
+
+    it('roundtrips exactly (lossless)', () => {
+      const param = floatParam(0)
+      const encoded = param.encode(Math.PI)
+      expect(param.decode(encoded)).toBe(Math.PI)
+    })
+
+    it('encodes default value as undefined', () => {
+      const param = floatParam(0)
+      expect(param.encode(0)).toBeUndefined()
+    })
+
+    it('decodes undefined as default', () => {
+      const param = floatParam(1.5)
+      expect(param.decode(undefined)).toBe(1.5)
+    })
   })
 
-  it('decodes string to float', () => {
-    const param = floatParam(0)
-    expect(param.decode('3.14')).toBeCloseTo(3.14)
-  })
+  describe('lossy base64 encoding', () => {
+    it('encodes with exp+mant options', () => {
+      const param = floatParam({ default: 0, encoding: 'base64', exp: 5, mant: 22 })
+      const encoded = param.encode(Math.PI)
+      expect(encoded).toBeDefined()
+      expect(encoded!.length).toBeLessThan(11) // lossy is shorter
+    })
 
-  it('decodes undefined as default', () => {
-    const param = floatParam(1.5)
-    expect(param.decode(undefined)).toBe(1.5)
+    it('encodes with precision string', () => {
+      const param = floatParam({ default: 0, encoding: 'base64', precision: '5+22' })
+      const encoded = param.encode(Math.PI)
+      expect(encoded).toBeDefined()
+      expect(encoded!.length).toBeLessThan(11)
+    })
+
+    it('roundtrips approximately', () => {
+      const param = floatParam({ default: 0, encoding: 'base64', exp: 5, mant: 22 })
+      const encoded = param.encode(Math.PI)
+      const decoded = param.decode(encoded)
+      expect(decoded).toBeCloseTo(Math.PI, 5) // ~7 digits precision
+    })
   })
 })
 
