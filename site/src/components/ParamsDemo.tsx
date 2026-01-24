@@ -198,7 +198,7 @@ export interface ParamValues {
   batch: { bx: number; by: number }
   setBatch: (v: Partial<{ bx: number; by: number }>) => void
   // Hook for FloatDemo (passed from parent to use correct mode)
-  useUrlParam: <T>(key: string, param: Param<T>, options?: { debounce?: number }) => [T, (v: T) => void]
+  useUrlState: <T>(key: string, param: Param<T>, options?: { debounce?: number }) => [T, (v: T) => void]
 }
 
 interface ParamsDemoProps extends ParamValues {
@@ -219,7 +219,7 @@ export function ParamsDemo({
   multiTags, setMultiTags,
   multiIds, setMultiIds,
   batch, setBatch,
-  useUrlParam,
+  useUrlState,
 }: ParamsDemoProps) {
   const location = useLocation()
   const [activeKeys, setActiveKeys] = useState<string[]>([])
@@ -355,7 +355,7 @@ export function ParamsDemo({
         </div>
         <details className="code-sample">
           <summary>Code</summary>
-          <pre>{`const [enabled, setEnabled] = useUrlParam('e', boolParam)`}</pre>
+          <pre>{`const [enabled, setEnabled] = useUrlState('e', boolParam)`}</pre>
         </details>
       </section>
 
@@ -377,7 +377,7 @@ export function ParamsDemo({
         </div>
         <details className="code-sample">
           <summary>Code</summary>
-          <pre>{`const [name, setName] = useUrlParam('n', stringParam())`}</pre>
+          <pre>{`const [name, setName] = useUrlState('n', stringParam())`}</pre>
         </details>
       </section>
 
@@ -409,8 +409,8 @@ export function ParamsDemo({
         </div>
         <details className="code-sample">
           <summary>Code</summary>
-          <pre>{`const [count, setCount] = useUrlParam('c', intParam(0))
-const [ratio, setRatio] = useUrlParam('r', floatParam(1.0))`}</pre>
+          <pre>{`const [count, setCount] = useUrlState('c', intParam(0))
+const [ratio, setRatio] = useUrlState('r', floatParam(1.0))`}</pre>
         </details>
       </section>
 
@@ -435,7 +435,7 @@ const [ratio, setRatio] = useUrlParam('r', floatParam(1.0))`}</pre>
           <pre>{`const themes = ['light', 'dark', 'auto'] as const
 type Theme = typeof themes[number]
 
-const [theme, setTheme] = useUrlParam('t', enumParam<Theme>('light', themes))`}</pre>
+const [theme, setTheme] = useUrlState('t', enumParam<Theme>('light', themes))`}</pre>
         </details>
       </section>
 
@@ -458,7 +458,7 @@ const [theme, setTheme] = useUrlParam('t', enumParam<Theme>('light', themes))`}<
         <details className="code-sample">
           <summary>Code</summary>
           <pre>{`// Space-separated in URL: ?tags=react+vue
-const [tags, setTags] = useUrlParam('tags', stringsParam([], ' '))`}</pre>
+const [tags, setTags] = useUrlState('tags', stringsParam([], ' '))`}</pre>
         </details>
       </section>
 
@@ -501,7 +501,7 @@ const [tags, setTags] = useUrlParam('tags', stringsParam([], ' '))`}</pre>
         <details className="code-sample">
           <summary>Code</summary>
           <pre>{`// Encodes as offset+pageSize: ?p=40+50
-const [page, setPage] = useUrlParam('p', paginationParam({ offset: 0, pageSize: 10 }))`}</pre>
+const [page, setPage] = useUrlState('p', paginationParam({ offset: 0, pageSize: 10 }))`}</pre>
         </details>
       </section>
 
@@ -544,17 +544,17 @@ const [page, setPage] = useUrlParam('p', paginationParam({ offset: 0, pageSize: 
           <summary>Code</summary>
           <pre>{`// Map display values to short codes: Rides↔r, Minutes↔m, Distance↔d
 const metrics = { Rides: 'r', Minutes: 'm', Distance: 'd' } as const
-const [metric, setMetric] = useUrlParam('y', codeParam<Metric>('Rides', metrics))
+const [metric, setMetric] = useUrlState('y', codeParam<Metric>('Rides', metrics))
 
 // Multi-select codes: ?rg=nj (NYC + JC)
 const regionCodes = { NYC: 'n', JC: 'j', HOB: 'h' } as const
-const [regions, setRegions] = useUrlParam('rg', codesParam<Region>([], regionCodes))`}</pre>
+const [regions, setRegions] = useUrlState('rg', codesParam<Region>([], regionCodes))`}</pre>
         </details>
       </section>
 
       {/* Multi-value params */}
       <section id="section-multi" className="section" style={getSectionStyle(['tag', 'id'])} onMouseEnter={activate('tag', 'id')} onMouseLeave={deactivate}>
-        <h2>Multi-Value (useMultiUrlParam)</h2>
+        <h2>Multi-Value (useMultiUrlState)</h2>
         <div className="controls">
           <div className="control-group">
             <label>Tags (repeated keys)</label>
@@ -596,14 +596,14 @@ const [regions, setRegions] = useUrlParam('rg', codesParam<Region>([], regionCod
         <details className="code-sample">
           <summary>Code</summary>
           <pre>{`// Repeated keys: ?tag=alpha&tag=beta&id=1&id=2
-const [tags, setTags] = useMultiUrlParam('tag', multiStringParam([]))
-const [ids, setIds] = useMultiUrlParam('id', multiIntParam([]))`}</pre>
+const [tags, setTags] = useMultiUrlState('tag', multiStringParam([]))
+const [ids, setIds] = useMultiUrlState('id', multiIntParam([]))`}</pre>
         </details>
       </section>
 
       {/* Batch Updates */}
       <section id="section-batch" className="section" style={getSectionStyle(['bx', 'by'])} onMouseEnter={activate('bx', 'by')} onMouseLeave={deactivate}>
-        <h2>Batch Updates (useUrlParams)</h2>
+        <h2>Batch Updates (useUrlStates)</h2>
         <div className="controls">
           <div className="control-group">
             <label>X</label>
@@ -643,7 +643,7 @@ const [ids, setIds] = useMultiUrlParam('id', multiIntParam([]))`}</pre>
         <details className="code-sample">
           <summary>Code</summary>
           <pre>{`// Update multiple params in one history entry
-const { values, setValues } = useUrlParams({
+const { values, setValues } = useUrlStates({
   bx: intParam(0),
   by: intParam(0),
 })
@@ -663,7 +663,7 @@ const { values, setValues } = useUrlParams({
           This section demonstrates using binary encodings for floats and XY-points, and how to build custom encodings.
         </p>
       </div>
-      <FloatDemo useUrlParam={useUrlParam} />
+      <FloatDemo useUrlState={useUrlState} />
     </>
   )
 }

@@ -101,8 +101,8 @@ import type { Param } from './index.js'
  *   fromBytes: (bytes) => decodeBytesToShapes(bytes),
  * })
  *
- * // Use with useUrlParam
- * const [shapes, setShapes] = useUrlParam('s', shapesParam)
+ * // Use with useUrlState
+ * const [shapes, setShapes] = useUrlState('s', shapesParam)
  * ```
  */
 export function binaryParam<T>(options: BinaryParamOptions<T>): Param<T | null> {

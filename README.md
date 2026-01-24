@@ -25,7 +25,7 @@ Type-safe URL-parameter (query and hash) management with minimal, human-readable
 
 - 🎯 **Type-safe**: Full TypeScript support with generic `Param<T>` interface
 - 📦 **Tiny URLs**: Smart encoding - omit defaults, use short keys, `+` for spaces
-- ⚛️ **React hooks**: `useUrlParam()` and `useUrlParams()` for seamless integration
+- ⚛️ **React hooks**: `useUrlState()` and `useUrlStates()` for seamless integration
 - 🔧 **Framework-agnostic**: Core utilities work anywhere, React hooks are optional
 - 🌳 **Tree-shakeable**: ESM + CJS builds with TypeScript declarations
 - 0️⃣ **Zero dependencies**: Except React (peer dependency, optional)
@@ -45,12 +45,12 @@ pnpm add use-prms
 ## Quick Start <a id="quick-start"></a>
 
 ```typescript
-import { useUrlParam, boolParam, stringParam, intParam } from 'use-prms'
+import { useUrlState, boolParam, stringParam, intParam } from 'use-prms'
 
 function MyComponent() {
-  const [zoom, setZoom] = useUrlParam('z', boolParam)
-  const [device, setDevice] = useUrlParam('d', stringParam())
-  const [count, setCount] = useUrlParam('n', intParam(10))
+  const [zoom, setZoom] = useUrlState('z', boolParam)
+  const [device, setDevice] = useUrlState('d', stringParam())
+  const [count, setCount] = useUrlState('n', intParam(10))
 
   // URL: ?z&d=gym&n=5
   // zoom = true, device = "gym", count = 5
@@ -69,31 +69,31 @@ function MyComponent() {
 
 ### Boolean
 ```typescript
-const [enabled, setEnabled] = useUrlParam('e', boolParam)
+const [enabled, setEnabled] = useUrlState('e', boolParam)
 // ?e → true
 // (absent) → false
 ```
 
 ### Strings
 ```typescript
-const [name, setName] = useUrlParam('n', stringParam())           // optional
-const [mode, setMode] = useUrlParam('m', defStringParam('auto'))  // with default
+const [name, setName] = useUrlState('n', stringParam())           // optional
+const [mode, setMode] = useUrlState('m', defStringParam('auto'))  // with default
 // ?n=foo → "foo"
 // (absent) → undefined / "auto"
 ```
 
 ### Numbers
 ```typescript
-const [count, setCount] = useUrlParam('c', intParam(0))
-const [ratio, setRatio] = useUrlParam('r', floatParam(1.0))
-const [id, setId] = useUrlParam('id', optIntParam)  // number | null
+const [count, setCount] = useUrlState('c', intParam(0))
+const [ratio, setRatio] = useUrlState('r', floatParam(1.0))
+const [id, setId] = useUrlState('id', optIntParam)  // number | null
 // ?c=5&r=1.5&id=123 → 5, 1.5, 123
 // (absent) → 0, 1.0, null
 ```
 
 ### Enums
 ```typescript
-const [theme, setTheme] = useUrlParam(
+const [theme, setTheme] = useUrlState(
   't',
   enumParam('light', ['light', 'dark', 'auto'] as const)
 )
@@ -103,20 +103,20 @@ const [theme, setTheme] = useUrlParam(
 
 ### Arrays (delimiter-separated)
 ```typescript
-const [tags, setTags] = useUrlParam('tags', stringsParam([], ','))
-const [ids, setIds] = useUrlParam('ids', numberArrayParam([]))
+const [tags, setTags] = useUrlState('tags', stringsParam([], ','))
+const [ids, setIds] = useUrlState('ids', numberArrayParam([]))
 // ?tags=foo,bar,baz → ["foo", "bar", "baz"]
 // ?ids=1,2,3 → [1, 2, 3]
 ```
 
 ### Multi-value Arrays (repeated keys)
 ```typescript
-import { useMultiUrlParam, multiStringParam, multiIntParam } from 'use-prms'
+import { useMultiUrlState, multiStringParam, multiIntParam } from 'use-prms'
 
-const [tags, setTags] = useMultiUrlParam('tag', multiStringParam())
+const [tags, setTags] = useMultiUrlState('tag', multiStringParam())
 // ?tag=foo&tag=bar&tag=baz → ["foo", "bar", "baz"]
 
-const [ids, setIds] = useMultiUrlParam('id', multiIntParam())
+const [ids, setIds] = useMultiUrlState('id', multiIntParam())
 // ?id=1&id=2&id=3 → [1, 2, 3]
 
 // Also available: multiFloatParam()
@@ -125,14 +125,14 @@ const [ids, setIds] = useMultiUrlParam('id', multiIntParam())
 ### Compact Code Mapping
 ```typescript
 // Single value with short codes
-const [metric, setMetric] = useUrlParam('y', codeParam('Rides', {
+const [metric, setMetric] = useUrlState('y', codeParam('Rides', {
   Rides: 'r',
   Minutes: 'm',
 }))
 // ?y=m → "Minutes", omitted for default "Rides"
 
 // Multi-value with short codes (omits when all selected)
-const [regions, setRegions] = useUrlParam('r', codesParam(
+const [regions, setRegions] = useUrlState('r', codesParam(
   ['NYC', 'JC', 'HOB'],
   { NYC: 'n', JC: 'j', HOB: 'h' }
 ))
@@ -141,7 +141,7 @@ const [regions, setRegions] = useUrlParam('r', codesParam(
 
 ### Pagination
 ```typescript
-const [page, setPage] = useUrlParam('p', paginationParam(20))
+const [page, setPage] = useUrlState('p', paginationParam(20))
 // Encodes offset + pageSize compactly using + as delimiter:
 // { offset: 0, pageSize: 20 } → (omitted)
 // { offset: 0, pageSize: 50 } → ?p=+50
@@ -173,18 +173,18 @@ const dateParam: Param<Date> = {
   }
 }
 
-const [date, setDate] = useUrlParam('d', dateParam)
+const [date, setDate] = useUrlState('d', dateParam)
 // ?d=251123 → Date(2025, 10, 23)
 ```
 
 ## Batch Updates <a id="batch"></a>
 
-Use `useUrlParams()` to update multiple parameters atomically:
+Use `useUrlStates()` to update multiple parameters atomically:
 
 ```typescript
-import { useUrlParams, intParam, boolParam } from 'use-prms'
+import { useUrlStates, intParam, boolParam } from 'use-prms'
 
-const { values, setValues } = useUrlParams({
+const { values, setValues } = useUrlStates({
   page: intParam(1),
   size: intParam(20),
   grid: boolParam
@@ -203,7 +203,7 @@ setValues({ page: 2, size: 50 })
 
 Example:
 ```typescript
-const [devices, setDevices] = useUrlParam('d', stringsParam([], ' '))
+const [devices, setDevices] = useUrlState('d', stringsParam([], ' '))
 setDevices(['gym', 'bedroom'])
 // URL: ?d=gym+bedroom
 ```
@@ -230,9 +230,9 @@ Use hash fragment (`#key=value`) instead of query string (`?key=value`):
 
 ```typescript
 // Just change the import path
-import { useUrlParam, boolParam } from 'use-prms/hash'
+import { useUrlState, boolParam } from 'use-prms/hash'
 
-const [zoom, setZoom] = useUrlParam('z', boolParam)
+const [zoom, setZoom] = useUrlState('z', boolParam)
 // URL: https://example.com/#z (instead of ?z)
 ```
 
@@ -240,7 +240,7 @@ Same API, different URL location. Useful when query strings conflict with server
 
 ## API Reference <a id="api"></a>
 
-### `useUrlParam<T>(key: string, param: Param<T>, push?: boolean)`
+### `useUrlState<T>(key: string, param: Param<T>, push?: boolean)`
 
 React hook for managing a single URL parameter.
 
@@ -249,7 +249,7 @@ React hook for managing a single URL parameter.
 - `push`: Use pushState (true) or replaceState (false, default)
 - Returns: `[value: T, setValue: (value: T) => void]`
 
-### `useUrlParams<P>(params: P, push?: boolean)`
+### `useUrlStates<P>(params: P, push?: boolean)`
 
 React hook for managing multiple URL parameters together.
 
@@ -257,7 +257,7 @@ React hook for managing multiple URL parameters together.
 - `push`: Use pushState (true) or replaceState (false, default)
 - Returns: `{ values, setValues }`
 
-### `useMultiUrlParam<T>(key: string, param: MultiParam<T>, push?: boolean)`
+### `useMultiUrlState<T>(key: string, param: MultiParam<T>, push?: boolean)`
 
 React hook for managing a multi-value URL parameter (repeated keys).
 

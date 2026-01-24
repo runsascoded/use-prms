@@ -157,16 +157,16 @@ function PointGrid({ point, onPointChange, width = 200, height = 200 }: PointGri
 }
 
 export interface FloatDemoProps {
-  useUrlParam: UseUrlParamHook
+  useUrlState: UseUrlParamHook
 }
 
 // Available mantissa bit options for the dropdown
 const PRECISION_OPTIONS = [16, 22, 28, 34, 40, 46, 52]
 
-export function FloatDemo({ useUrlParam }: FloatDemoProps) {
+export function FloatDemo({ useUrlState }: FloatDemoProps) {
   // ========== BINARY ENCODING SECTION ==========
   const binaryFloatParam = useMemo(() => floatParam(Math.PI), [])
-  const [binaryValue, setBinaryValue] = useUrlParam('v', binaryFloatParam)
+  const [binaryValue, setBinaryValue] = useUrlState('v', binaryFloatParam)
 
   // Compute encodings for display
   const binaryEncodings = useMemo(() => {
@@ -194,7 +194,7 @@ export function FloatDemo({ useUrlParam }: FloatDemoProps) {
     }
   }, [encoding, decimals, precision, isDirty])
 
-  const [floatValue, setFloatValue] = useUrlParam('f', floatParamDef)
+  const [floatValue, setFloatValue] = useUrlState('f', floatParamDef)
 
   // On mount, force re-encode with exact default values
   useEffect(() => {
@@ -248,7 +248,7 @@ export function FloatDemo({ useUrlParam }: FloatDemoProps) {
   }, [pointEncoding, pointDecimals, pointPrecision, defaultPoint])
 
   // URL-synced point (debounced writes)
-  const [urlPoint, setUrlPoint] = useUrlParam('xy', pointParamDef, { debounce: pointDebounce })
+  const [urlPoint, setUrlPoint] = useUrlState('xy', pointParamDef, { debounce: pointDebounce })
 
   // Local display point (immediate updates)
   const [displayPoint, setDisplayPoint] = useState<Point | null>(null)
@@ -361,10 +361,10 @@ export function FloatDemo({ useUrlParam }: FloatDemoProps) {
 
         <details className="code-sample">
           <summary>Code</summary>
-          <pre>{`import { useUrlParam, floatParam } from 'use-prms'
+          <pre>{`import { useUrlState, floatParam } from 'use-prms'
 
 // Full 64-bit precision (8 bytes → 11 base64 chars)
-const [value, setValue] = useUrlParam('v', floatParam(Math.PI))`}</pre>
+const [value, setValue] = useUrlState('v', floatParam(Math.PI))`}</pre>
         </details>
       </section>
 
@@ -455,13 +455,13 @@ const [value, setValue] = useUrlParam('v', floatParam(Math.PI))`}</pre>
 
         <details className="code-sample">
           <summary>Code</summary>
-          <pre>{`import { useUrlParam, floatParam } from 'use-prms'
+          <pre>{`import { useUrlState, floatParam } from 'use-prms'
 
 // Base10 string truncation (lossy)
-const [f, setF] = useUrlParam('f', floatParam({ encoding: 'string', decimals: ${decimals} }))
+const [f, setF] = useUrlState('f', floatParam({ encoding: 'string', decimals: ${decimals} }))
 
 // Base64 binary encoding (lossy, but more compact)
-const [f, setF] = useUrlParam('f', floatParam({ encoding: 'base64', exp: 5, mant: ${precision} }))`}</pre>
+const [f, setF] = useUrlState('f', floatParam({ encoding: 'base64', exp: 5, mant: ${precision} }))`}</pre>
         </details>
 
         <details className="precision-reference">
@@ -591,9 +591,9 @@ const [f, setF] = useUrlParam('f', floatParam({ encoding: 'base64', exp: 5, mant
 
         <details className="code-sample">
           <summary>Code</summary>
-          <pre>{`import { useUrlParam, pointParam } from 'use-prms'
+          <pre>{`import { useUrlState, pointParam } from 'use-prms'
 
-const [point, setPoint] = useUrlParam(
+const [point, setPoint] = useUrlState(
   'xy',
   pointParam({
     encoding: '${pointEncoding}',

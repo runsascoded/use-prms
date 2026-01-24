@@ -119,6 +119,6 @@ export function updateUrl(params: Record<string, Encoded>, push = false): void {
 
 export * from './params.js'
 export * from './multiParams.js'
-export * from './useUrlParam.js'
+export * from './useUrlState.js'
 export * from './binary.js'
 export * from './float.js'

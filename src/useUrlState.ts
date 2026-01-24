@@ -9,9 +9,9 @@ import { getDefaultStrategy } from './core.js'
 import type { MultiParam } from './multiParams.js'
 
 /**
- * Options for useUrlParam hook
+ * Options for useUrlState hook
  */
-export interface UseUrlParamOptions {
+export interface UseUrlStateOptions {
   /**
    * Debounce URL writes in milliseconds.
    * State updates immediately, but URL updates are debounced.
@@ -119,19 +119,19 @@ function multiToSingle(multi: MultiEncoded): string | undefined {
  * @example
  * ```tsx
  * // Basic usage
- * const [zoom, setZoom] = useUrlParam('z', boolParam)
+ * const [zoom, setZoom] = useUrlState('z', boolParam)
  *
  * // With debounce for high-frequency updates
- * const [position, setPosition] = useUrlParam('pos', floatParam(0), { debounce: 300 })
+ * const [position, setPosition] = useUrlState('pos', floatParam(0), { debounce: 300 })
  * ```
  */
-export function useUrlParam<T>(
+export function useUrlState<T>(
   key: string,
   param: Param<T>,
-  options: UseUrlParamOptions | boolean = {}
+  options: UseUrlStateOptions | boolean = {}
 ): [T, (value: T) => void] {
   // Handle legacy boolean `push` argument for backwards compatibility
-  const opts: UseUrlParamOptions = typeof options === 'boolean'
+  const opts: UseUrlStateOptions = typeof options === 'boolean'
     ? { push: options }
     : options
   const { debounce: debounceMs = 0, push = false } = opts
@@ -256,7 +256,7 @@ export function useUrlParam<T>(
  *
  * @example
  * ```tsx
- * const { values, setValues } = useUrlParams({
+ * const { values, setValues } = useUrlStates({
  *   zoom: boolParam,
  *   device: stringParam('default'),
  *   count: intParam(10)
@@ -266,15 +266,15 @@ export function useUrlParam<T>(
  * setValues({ zoom: true, count: 20 })
  * ```
  */
-export function useUrlParams<P extends Record<string, Param<any>>>(
+export function useUrlStates<P extends Record<string, Param<any>>>(
   params: P,
-  options: UseUrlParamOptions | boolean = {}
+  options: UseUrlStateOptions | boolean = {}
 ): {
   values: { [K in keyof P]: P[K] extends Param<infer T> ? T : never }
   setValues: (updates: Partial<{ [K in keyof P]: P[K] extends Param<infer T> ? T : never }>) => void
 } {
   // Handle legacy boolean `push` argument for backwards compatibility
-  const opts: UseUrlParamOptions = typeof options === 'boolean'
+  const opts: UseUrlStateOptions = typeof options === 'boolean'
     ? { push: options }
     : options
   const { debounce: debounceMs = 0, push = false } = opts
@@ -397,17 +397,17 @@ export function useUrlParams<P extends Record<string, Param<any>>>(
  *
  * @example
  * ```tsx
- * const [tags, setTags] = useMultiUrlParam('tag', multiStringParam())
+ * const [tags, setTags] = useMultiUrlState('tag', multiStringParam())
  * // URL: ?tag=a&tag=b → tags = ['a', 'b']
  * ```
  */
-export function useMultiUrlParam<T>(
+export function useMultiUrlState<T>(
   key: string,
   param: MultiParam<T>,
-  options: UseUrlParamOptions | boolean = {}
+  options: UseUrlStateOptions | boolean = {}
 ): [T, (value: T) => void] {
   // Handle legacy boolean `push` argument for backwards compatibility
-  const opts: UseUrlParamOptions = typeof options === 'boolean'
+  const opts: UseUrlStateOptions = typeof options === 'boolean'
     ? { push: options }
     : options
   const { debounce: debounceMs = 0, push = false } = opts
@@ -528,7 +528,7 @@ function arraysEqual<T>(a: T[], b: T[]): boolean {
  *
  * @example
  * ```tsx
- * const { values, setValues } = useMultiUrlParams({
+ * const { values, setValues } = useMultiUrlStates({
  *   tags: multiStringParam(),
  *   ids: multiIntParam()
  * })
@@ -537,15 +537,15 @@ function arraysEqual<T>(a: T[], b: T[]): boolean {
  * setValues({ tags: ['a', 'b'], ids: [1, 2, 3] })
  * ```
  */
-export function useMultiUrlParams<P extends Record<string, MultiParam<any>>>(
+export function useMultiUrlStates<P extends Record<string, MultiParam<any>>>(
   params: P,
-  options: UseUrlParamOptions | boolean = {}
+  options: UseUrlStateOptions | boolean = {}
 ): {
   values: { [K in keyof P]: P[K] extends MultiParam<infer T> ? T : never }
   setValues: (updates: Partial<{ [K in keyof P]: P[K] extends MultiParam<infer T> ? T : never }>) => void
 } {
   // Handle legacy boolean `push` argument for backwards compatibility
-  const opts: UseUrlParamOptions = typeof options === 'boolean'
+  const opts: UseUrlStateOptions = typeof options === 'boolean'
     ? { push: options }
     : options
   const { debounce: debounceMs = 0, push = false } = opts

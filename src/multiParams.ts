@@ -20,7 +20,7 @@ export type MultiParam<T> = {
  *
  * @example
  * // ?tag=a&tag=b&tag=c → ['a', 'b', 'c']
- * const [tags, setTags] = useMultiUrlParam('tag', multiStringParam())
+ * const [tags, setTags] = useMultiUrlState('tag', multiStringParam())
  */
 export function multiStringParam(init: string[] = []): MultiParam<string[]> {
   return {
@@ -42,7 +42,7 @@ export function multiStringParam(init: string[] = []): MultiParam<string[]> {
  *
  * @example
  * // ?id=1&id=2&id=3 → [1, 2, 3]
- * const [ids, setIds] = useMultiUrlParam('id', multiIntParam())
+ * const [ids, setIds] = useMultiUrlState('id', multiIntParam())
  */
 export function multiIntParam(init: number[] = []): MultiParam<number[]> {
   return {
@@ -64,7 +64,7 @@ export function multiIntParam(init: number[] = []): MultiParam<number[]> {
  *
  * @example
  * // ?val=1.5&val=2.7 → [1.5, 2.7]
- * const [vals, setVals] = useMultiUrlParam('val', multiFloatParam())
+ * const [vals, setVals] = useMultiUrlState('val', multiFloatParam())
  */
 export function multiFloatParam(init: number[] = []): MultiParam<number[]> {
   return {
