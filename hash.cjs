@@ -622,10 +622,63 @@ function useMultiUrlStates(params, options = {}) {
   return { values, setValues };
 }
 
+// src/alphabet.ts
+var ALPHABETS = {
+  /**
+   * RFC 4648 base64url alphabet (default)
+   * Standard URL-safe encoding, but NOT lexicographically sortable.
+   */
+  rfc4648: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_",
+  /**
+   * ASCII-ordered alphabet for lexicographic sortability
+   * Encoded strings sort in the same order as their numeric values.
+   * Uses URL-safe characters only (- and _).
+   */
+  sortable: "-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz"
+};
+var URL_SAFE_CHARS = /^[A-Za-z0-9\-_]+$/;
+function validateAlphabet(alphabet) {
+  if (alphabet.length !== 64) {
+    throw new Error(`Alphabet must be exactly 64 characters, got ${alphabet.length}`);
+  }
+  const seen = /* @__PURE__ */ new Set();
+  for (const char of alphabet) {
+    if (seen.has(char)) {
+      throw new Error(`Duplicate character in alphabet: '${char}'`);
+    }
+    seen.add(char);
+  }
+  if (!URL_SAFE_CHARS.test(alphabet)) {
+    const unsafe = [...alphabet].filter((c) => !URL_SAFE_CHARS.test(c));
+    throw new Error(`Alphabet contains non-URL-safe characters: ${unsafe.map((c) => `'${c}'`).join(", ")}`);
+  }
+}
+function resolveAlphabet(alphabet) {
+  if (alphabet in ALPHABETS) {
+    return ALPHABETS[alphabet];
+  }
+  validateAlphabet(alphabet);
+  return alphabet;
+}
+function createLookupMap(alphabet) {
+  return new Map(alphabet.split("").map((c, i) => [c, i]));
+}
+
 // src/binary.ts
-var BASE64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-var BASE64_LOOKUP = new Map(BASE64_CHARS.split("").map((c, i) => [c, i]));
-function base64Encode(bytes) {
+var BASE64_CHARS = ALPHABETS.rfc4648;
+var DEFAULT_LOOKUP = createLookupMap(ALPHABETS.rfc4648);
+var lookupCache = /* @__PURE__ */ new Map();
+function getLookupMap(alphabet) {
+  if (alphabet === ALPHABETS.rfc4648) return DEFAULT_LOOKUP;
+  let lookup = lookupCache.get(alphabet);
+  if (!lookup) {
+    lookup = createLookupMap(alphabet);
+    lookupCache.set(alphabet, lookup);
+  }
+  return lookup;
+}
+function base64Encode(bytes, options) {
+  const chars = options?.alphabet ? resolveAlphabet(options.alphabet) : ALPHABETS.rfc4648;
   let result = "";
   let i = 0;
   while (i < bytes.length) {
@@ -633,25 +686,27 @@ function base64Encode(bytes) {
     const b1 = bytes[i++] ?? 0;
     const b2 = bytes[i++] ?? 0;
     const n = b0 << 16 | b1 << 8 | b2;
-    result += BASE64_CHARS[n >> 18 & 63];
-    result += BASE64_CHARS[n >> 12 & 63];
+    result += chars[n >> 18 & 63];
+    result += chars[n >> 12 & 63];
     if (i - 2 < bytes.length) {
-      result += BASE64_CHARS[n >> 6 & 63];
+      result += chars[n >> 6 & 63];
     }
     if (i - 1 < bytes.length) {
-      result += BASE64_CHARS[n & 63];
+      result += chars[n & 63];
     }
   }
   return result;
 }
-function base64Decode(str) {
+function base64Decode(str, options) {
+  const alphabet = options?.alphabet ? resolveAlphabet(options.alphabet) : ALPHABETS.rfc4648;
+  const lookup = getLookupMap(alphabet);
   str = str.replace(/=+$/, "");
   const bytes = [];
   for (let i = 0; i < str.length; i += 4) {
-    const c0 = BASE64_LOOKUP.get(str[i]) ?? 0;
-    const c1 = BASE64_LOOKUP.get(str[i + 1]) ?? 0;
-    const c2 = i + 2 < str.length ? BASE64_LOOKUP.get(str[i + 2]) ?? 0 : 0;
-    const c3 = i + 3 < str.length ? BASE64_LOOKUP.get(str[i + 3]) ?? 0 : 0;
+    const c0 = lookup.get(str[i]) ?? 0;
+    const c1 = lookup.get(str[i + 1]) ?? 0;
+    const c2 = i + 2 < str.length ? lookup.get(str[i + 2]) ?? 0 : 0;
+    const c3 = i + 3 < str.length ? lookup.get(str[i + 3]) ?? 0 : 0;
     const n = c0 << 18 | c1 << 12 | c2 << 6 | c3;
     bytes.push(n >> 16 & 255);
     if (i + 2 < str.length) bytes.push(n >> 8 & 255);
@@ -660,18 +715,19 @@ function base64Decode(str) {
   return new Uint8Array(bytes);
 }
 function binaryParam(options) {
-  const { toBytes, fromBytes } = options;
+  const { toBytes, fromBytes, alphabet } = options;
+  const encodeOpts = alphabet ? { alphabet } : void 0;
   return {
     encode: (value) => {
       if (value === null) return void 0;
       const bytes = toBytes(value);
       if (bytes.length === 0) return void 0;
-      return base64Encode(bytes);
+      return base64Encode(bytes, encodeOpts);
     },
     decode: (encoded) => {
       if (encoded === void 0 || encoded === "") return null;
       try {
-        const bytes = base64Decode(encoded);
+        const bytes = base64Decode(encoded, encodeOpts);
         return fromBytes(bytes);
       } catch {
         return null;
@@ -679,8 +735,8 @@ function binaryParam(options) {
     }
   };
 }
-function base64Param(toBytes, fromBytes) {
-  return binaryParam({ toBytes, fromBytes });
+function base64Param(toBytes, fromBytes, alphabet) {
+  return binaryParam({ toBytes, fromBytes, alphabet });
 }
 function floatToBytes(value) {
   const buf = new ArrayBuffer(8);
@@ -942,18 +998,46 @@ var BitBuffer = class _BitBuffer {
   /**
    * Convert buffer to URL-safe base64 string
    *
-   * This is the primary way to serialize a BitBuffer for use in URL parameters.
+   * Encodes bits directly to base64 (6 bits per character) for maximum compactness.
+   * This is more efficient than going through bytes when bit count isn't a multiple of 8.
+   *
+   * @param options - Base64 options (alphabet)
    */
-  toBase64() {
-    return base64Encode(this.toBytes());
+  toBase64(options) {
+    const alphabet = resolveAlphabet(options?.alphabet ?? "rfc4648");
+    const overhang = this.end % 6;
+    if (overhang) {
+      this.encodeInt(0, 6 - overhang);
+    }
+    const numChars = this.end / 6;
+    this.seek(0);
+    let result = "";
+    for (let i = 0; i < numChars; i++) {
+      result += alphabet[this.decodeInt(6)];
+    }
+    return result;
   }
   /**
    * Create a BitBuffer from a URL-safe base64 string
    *
-   * This is the primary way to deserialize a URL parameter back to a BitBuffer.
+   * Decodes base64 directly to bits (6 bits per character).
+   *
+   * @param str - The base64 string to decode
+   * @param options - Base64 options (alphabet)
    */
-  static fromBase64(str) {
-    return _BitBuffer.fromBytes(base64Decode(str));
+  static fromBase64(str, options) {
+    const alphabet = resolveAlphabet(options?.alphabet ?? "rfc4648");
+    const lookup = createLookupMap(alphabet);
+    const buf = new _BitBuffer();
+    for (const char of str) {
+      const idx = lookup.get(char);
+      if (idx === void 0) {
+        throw new Error(`Invalid base64 character: '${char}'`);
+      }
+      buf.encodeInt(idx, 6);
+    }
+    buf.seek(0);
+    return buf;
   }
 };
 function parsePrecisionString(s) {
@@ -971,7 +1055,8 @@ function floatParam(optsOrDefault = 0) {
     decimals,
     exp,
     mant,
-    precision
+    precision,
+    alphabet
   } = opts;
   if (encoding === "string") {
     if (exp !== void 0 || mant !== void 0 || precision !== void 0) {
@@ -991,47 +1076,49 @@ function floatParam(optsOrDefault = 0) {
       if (exp === void 0 || mant === void 0) {
         throw new Error("Both exp and mant must be specified together");
       }
-      return createLossyBase64Param(defaultValue, { expBits: exp, mantBits: mant });
+      return createLossyBase64Param(defaultValue, { expBits: exp, mantBits: mant }, alphabet);
     }
     if (hasPrecision) {
       const { exp: e, mant: m } = parsePrecisionString(precision);
-      return createLossyBase64Param(defaultValue, { expBits: e, mantBits: m });
+      return createLossyBase64Param(defaultValue, { expBits: e, mantBits: m }, alphabet);
     }
-    return createLosslessBase64Param(defaultValue);
+    return createLosslessBase64Param(defaultValue, alphabet);
   }
   if (decimals !== void 0) {
     return createTruncatedStringParam(defaultValue, decimals);
   }
   return createFullStringParam(defaultValue);
 }
-function createLosslessBase64Param(defaultValue) {
+function createLosslessBase64Param(defaultValue, alphabet) {
+  const opts = alphabet ? { alphabet } : void 0;
   return {
     encode: (value) => {
       if (value === defaultValue) return void 0;
-      return base64Encode(floatToBytes(value));
+      return base64Encode(floatToBytes(value), opts);
     },
     decode: (encoded) => {
       if (encoded === void 0 || encoded === "") return defaultValue;
       try {
-        return bytesToFloat(base64Decode(encoded));
+        return bytesToFloat(base64Decode(encoded, opts));
       } catch {
         return defaultValue;
       }
     }
   };
 }
-function createLossyBase64Param(defaultValue, scheme) {
+function createLossyBase64Param(defaultValue, scheme, alphabet) {
+  const opts = alphabet ? { alphabet } : void 0;
   return {
     encode: (value) => {
       if (value === defaultValue) return void 0;
       const buf = new BitBuffer();
       buf.encodeFixedPoints([value], scheme);
-      return buf.toBase64();
+      return buf.toBase64(opts);
     },
     decode: (encoded) => {
       if (encoded === void 0 || encoded === "") return defaultValue;
       try {
-        const buf = BitBuffer.fromBase64(encoded);
+        const buf = BitBuffer.fromBase64(encoded, opts);
         const [value] = buf.decodeFixedPoints(1, scheme);
         return value;
       } catch {
@@ -1077,10 +1164,12 @@ function pointParam(opts = {}) {
     encoding = "base64",
     decimals = 2,
     precision,
-    default: defaultPoint = null
+    default: defaultPoint = null,
+    alphabet
   } = opts;
   const scheme = resolvePrecision(precision);
   const multiplier = Math.pow(10, decimals);
+  const base64Opts = alphabet ? { alphabet } : void 0;
   return {
     encode: (point) => {
       if (point === null) return void 0;
@@ -1097,7 +1186,7 @@ function pointParam(opts = {}) {
       } else {
         const buf = new BitBuffer();
         buf.encodeFixedPoints([point.x, point.y], scheme);
-        return buf.toBase64();
+        return buf.toBase64(base64Opts);
       }
     },
     decode: (encoded) => {
@@ -1119,7 +1208,7 @@ function pointParam(opts = {}) {
           if (isNaN(x) || isNaN(y)) return defaultPoint;
           return { x, y };
         } else {
-          const buf = BitBuffer.fromBase64(encoded);
+          const buf = BitBuffer.fromBase64(encoded, base64Opts);
           const [x, y] = buf.decodeFixedPoints(2, scheme);
           return { x, y };
         }
@@ -1208,6 +1297,7 @@ function updateUrl(params, push = false) {
 // src/hash.ts
 setDefaultStrategy(hashStrategy);
 
+exports.ALPHABETS = ALPHABETS;
 exports.BASE64_CHARS = BASE64_CHARS;
 exports.BitBuffer = BitBuffer;
 exports.PRECISION_SCHEMES = precisionSchemes;
@@ -1221,6 +1311,7 @@ exports.bytesToFloat = bytesToFloat;
 exports.clearParams = clearParams;
 exports.codeParam = codeParam;
 exports.codesParam = codesParam;
+exports.createLookupMap = createLookupMap;
 exports.defStringParam = defStringParam;
 exports.encodeFloatAllModes = encodeFloatAllModes;
 exports.encodePointAllModes = encodePointAllModes;
@@ -1245,6 +1336,7 @@ exports.parseParams = parseParams;
 exports.pointParam = pointParam;
 exports.precisionSchemes = precisionSchemes;
 exports.queryStrategy = queryStrategy;
+exports.resolveAlphabet = resolveAlphabet;
 exports.resolvePrecision = resolvePrecision;
 exports.serializeMultiParams = serializeMultiParams;
 exports.serializeParams = serializeParams;
@@ -1258,5 +1350,6 @@ exports.useMultiUrlState = useMultiUrlState;
 exports.useMultiUrlStates = useMultiUrlStates;
 exports.useUrlState = useUrlState;
 exports.useUrlStates = useUrlStates;
+exports.validateAlphabet = validateAlphabet;
 //# sourceMappingURL=hash.cjs.map
 //# sourceMappingURL=hash.cjs.map

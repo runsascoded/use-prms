@@ -340,24 +340,86 @@ declare function useMultiUrlStates<P extends Record<string, MultiParam<any>>>(pa
 };
 
 /**
+ * Base64 alphabet definitions and utilities
+ *
+ * Provides named presets for common base64 alphabets and validation.
+ */
+/**
+ * Named alphabet presets
+ */
+declare const ALPHABETS: {
+    /**
+     * RFC 4648 base64url alphabet (default)
+     * Standard URL-safe encoding, but NOT lexicographically sortable.
+     */
+    readonly rfc4648: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    /**
+     * ASCII-ordered alphabet for lexicographic sortability
+     * Encoded strings sort in the same order as their numeric values.
+     * Uses URL-safe characters only (- and _).
+     */
+    readonly sortable: "-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz";
+};
+/**
+ * Preset alphabet names
+ */
+type AlphabetName = keyof typeof ALPHABETS;
+/**
+ * Alphabet specification: either a preset name or a 64-character string
+ */
+type Alphabet = AlphabetName | (string & {});
+/**
+ * Validate an alphabet string
+ * @throws Error if alphabet is invalid
+ */
+declare function validateAlphabet(alphabet: string): void;
+/**
+ * Resolve an alphabet specification to a 64-character string
+ * @param alphabet - Preset name or 64-character string
+ * @returns The resolved alphabet string
+ * @throws Error if alphabet is invalid
+ */
+declare function resolveAlphabet(alphabet: Alphabet): string;
+/**
+ * Create a reverse lookup map for decoding
+ */
+declare function createLookupMap(alphabet: string): Map<string, number>;
+
+/**
  * Binary encoding utilities for compact URL parameters
  *
  * Provides base64url encoding for arbitrary binary data.
  * Use these to create compact URL representations of complex data structures.
  */
+
 /**
  * URL-safe base64 alphabet (RFC 4648 base64url)
  * Uses - and _ instead of + and / for URL safety
+ * @deprecated Use ALPHABETS.rfc4648 instead
  */
-declare const BASE64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+declare const BASE64_CHARS: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 /**
- * Encode a Uint8Array to base64url string
+ * Options for base64 encoding/decoding
  */
-declare function base64Encode(bytes: Uint8Array): string;
+interface Base64Options {
+    /**
+     * Alphabet to use: preset name or 64-character string
+     * @default 'rfc4648'
+     */
+    alphabet?: Alphabet;
+}
 /**
- * Decode a base64url string to Uint8Array
+ * Encode a Uint8Array to base64 string
+ * @param bytes - The bytes to encode
+ * @param options - Encoding options (alphabet)
  */
-declare function base64Decode(str: string): Uint8Array;
+declare function base64Encode(bytes: Uint8Array, options?: Base64Options): string;
+/**
+ * Decode a base64 string to Uint8Array
+ * @param str - The base64 string to decode
+ * @param options - Decoding options (alphabet)
+ */
+declare function base64Decode(str: string, options?: Base64Options): Uint8Array;
 /**
  * Options for binary param creation
  */
@@ -370,6 +432,11 @@ interface BinaryParamOptions<T> {
      * Convert bytes to value
      */
     fromBytes: (bytes: Uint8Array) => T;
+    /**
+     * Alphabet to use: preset name or 64-character string
+     * @default 'rfc4648'
+     */
+    alphabet?: Alphabet;
 }
 
 /**
@@ -395,7 +462,7 @@ declare function binaryParam<T>(options: BinaryParamOptions<T>): Param<T | null>
  * Create a base64-encoded binary param
  * Shorthand for binaryParam
  */
-declare function base64Param<T>(toBytes: (value: T) => Uint8Array, fromBytes: (bytes: Uint8Array) => T): Param<T | null>;
+declare function base64Param<T>(toBytes: (value: T) => Uint8Array, fromBytes: (bytes: Uint8Array) => T, alphabet?: Alphabet): Param<T | null>;
 /**
  * Convert a 64-bit float to 8 bytes (IEEE 754 big-endian)
  */
@@ -411,6 +478,7 @@ declare function bytesToFloat(bytes: Uint8Array): number;
  * Provides IEEE 754 decomposition, fixed-point conversion, and bit-level packing
  * for encoding floats with configurable precision.
  */
+
 /**
  * Decomposed IEEE 754 double-precision float
  */
@@ -528,15 +596,21 @@ declare class BitBuffer {
     /**
      * Convert buffer to URL-safe base64 string
      *
-     * This is the primary way to serialize a BitBuffer for use in URL parameters.
+     * Encodes bits directly to base64 (6 bits per character) for maximum compactness.
+     * This is more efficient than going through bytes when bit count isn't a multiple of 8.
+     *
+     * @param options - Base64 options (alphabet)
      */
-    toBase64(): string;
+    toBase64(options?: Base64Options): string;
     /**
      * Create a BitBuffer from a URL-safe base64 string
      *
-     * This is the primary way to deserialize a URL parameter back to a BitBuffer.
+     * Decodes base64 directly to bits (6 bits per character).
+     *
+     * @param str - The base64 string to decode
+     * @param options - Base64 options (alphabet)
      */
-    static fromBase64(str: string): BitBuffer;
+    static fromBase64(str: string, options?: Base64Options): BitBuffer;
 }
 
 /**
@@ -559,6 +633,8 @@ interface FloatParamOptions {
     mant?: number;
     /** For lossy base64: string shorthand like '5+22' (exp+mant) */
     precision?: string;
+    /** For base64: alphabet preset or 64-char string */
+    alphabet?: Alphabet;
 }
 /**
  * Create a float param with configurable encoding
@@ -611,6 +687,8 @@ interface PointParamOptions {
     precision?: number | PrecisionScheme;
     /** Default point when param is missing */
     default?: Point;
+    /** For base64: alphabet preset or 64-char string */
+    alphabet?: Alphabet;
 }
 /**
  * Create a param for encoding a 2D point
@@ -700,4 +778,4 @@ declare function getCurrentParams(): Record<string, Encoded>;
  */
 declare function updateUrl(params: Record<string, Encoded>, push?: boolean): void;
 
-export { BASE64_CHARS, type BinaryParamOptions, BitBuffer, type CodeMap, type Encoded, type FixedPoint, type Float, type FloatEncoding, type FloatParamOptions, type LocationStrategy, type MultiEncoded, type MultiParam, precisionSchemes as PRECISION_SCHEMES, type Pagination, type Param, type Point, type PointParamOptions, type PrecisionScheme, type UseUrlStateOptions, base64Decode, base64Encode, base64FloatParam, base64Param, binaryParam, boolParam, bytesToFloat, clearParams, codeParam, codesParam, defStringParam, encodeFloatAllModes, encodePointAllModes, enumParam, floatParam, floatToBytes, fromFixedPoint, fromFloat, getCurrentParams, getDefaultStrategy, hashStrategy, intParam, multiFloatParam, multiIntParam, multiStringParam, notifyLocationChange, numberArrayParam, optIntParam, paginationParam, parseMultiParams, parseParams, pointParam, precisionSchemes, queryStrategy, resolvePrecision, serializeMultiParams, serializeParams, setDefaultStrategy, stringParam, stringsParam, toFixedPoint, toFloat, updateUrl, useMultiUrlState, useMultiUrlStates, useUrlState, useUrlStates };
+export { ALPHABETS, type Alphabet, type AlphabetName, BASE64_CHARS, type Base64Options, type BinaryParamOptions, BitBuffer, type CodeMap, type Encoded, type FixedPoint, type Float, type FloatEncoding, type FloatParamOptions, type LocationStrategy, type MultiEncoded, type MultiParam, precisionSchemes as PRECISION_SCHEMES, type Pagination, type Param, type Point, type PointParamOptions, type PrecisionScheme, type UseUrlStateOptions, base64Decode, base64Encode, base64FloatParam, base64Param, binaryParam, boolParam, bytesToFloat, clearParams, codeParam, codesParam, createLookupMap, defStringParam, encodeFloatAllModes, encodePointAllModes, enumParam, floatParam, floatToBytes, fromFixedPoint, fromFloat, getCurrentParams, getDefaultStrategy, hashStrategy, intParam, multiFloatParam, multiIntParam, multiStringParam, notifyLocationChange, numberArrayParam, optIntParam, paginationParam, parseMultiParams, parseParams, pointParam, precisionSchemes, queryStrategy, resolveAlphabet, resolvePrecision, serializeMultiParams, serializeParams, setDefaultStrategy, stringParam, stringsParam, toFixedPoint, toFloat, updateUrl, useMultiUrlState, useMultiUrlStates, useUrlState, useUrlStates, validateAlphabet };
