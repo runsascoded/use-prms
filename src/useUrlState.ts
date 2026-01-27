@@ -199,8 +199,6 @@ export function useUrlState<T>(
       const method = push ? 'pushState' : 'replaceState'
       window.history[method]({}, '', newUrl)
 
-      // Trigger events to notify other hooks
-      window.dispatchEvent(new PopStateEvent('popstate'))
     },
     [key, push, strategy]
   )
@@ -333,8 +331,6 @@ export function useUrlStates<P extends Record<string, Param<any>>>(
       const method = push ? 'pushState' : 'replaceState'
       window.history[method]({}, '', newUrl)
 
-      // Trigger events to notify other hooks
-      window.dispatchEvent(new PopStateEvent('popstate'))
     },
     [push, strategy]
   )
@@ -467,8 +463,6 @@ export function useMultiUrlState<T>(
       const method = push ? 'pushState' : 'replaceState'
       window.history[method]({}, '', newUrl)
 
-      // Trigger events to notify other hooks
-      window.dispatchEvent(new PopStateEvent('popstate'))
     },
     [key, push, strategy]
   )
@@ -604,8 +598,6 @@ export function useMultiUrlStates<P extends Record<string, MultiParam<any>>>(
       const method = push ? 'pushState' : 'replaceState'
       window.history[method]({}, '', newUrl)
 
-      // Trigger events to notify other hooks
-      window.dispatchEvent(new PopStateEvent('popstate'))
     },
     [push, strategy]
   )

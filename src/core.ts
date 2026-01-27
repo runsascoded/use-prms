@@ -94,15 +94,11 @@ function patchHistoryApi(): void {
   history.pushState = function(state, title, url) {
     originalPushState(state, title, url)
     window.dispatchEvent(new CustomEvent(LOCATION_CHANGE_EVENT))
-    // Also dispatch popstate for React Router and other libraries that listen to it
-    window.dispatchEvent(new PopStateEvent('popstate', { state }))
   }
 
   history.replaceState = function(state, title, url) {
     originalReplaceState(state, title, url)
     window.dispatchEvent(new CustomEvent(LOCATION_CHANGE_EVENT))
-    // Also dispatch popstate for React Router and other libraries that listen to it
-    window.dispatchEvent(new PopStateEvent('popstate', { state }))
   }
 }
 
