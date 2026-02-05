@@ -252,6 +252,22 @@ const [lat, setLat] = useUrlState('lat', floatParam({
 }))
 ```
 
+### Point Params
+
+Encode 2D points compactly:
+
+```typescript
+import { pointParam } from 'use-prms'
+
+// String encoding (human-readable)
+const [pos, setPos] = useUrlState('p', pointParam({ encoding: 'string', decimals: 2 }))
+// ?p=1.23+5.68 → { x: 1.23, y: 5.68 }
+
+// Binary encoding (more compact, default)
+const [pos, setPos] = useUrlState('p', pointParam({ precision: 22 }))
+// ?p=<base64> → { x: 1.234, y: 5.678 }
+```
+
 ### Custom Alphabets
 
 Choose between standard base64url or ASCII-sorted alphabet:
@@ -302,31 +318,41 @@ Same API, different URL location. Useful when query strings conflict with server
 
 ## API Reference <a id="api"></a>
 
-### `useUrlState<T>(key: string, param: Param<T>, push?: boolean)`
+### `useUrlState<T>(key, param, options?)`
 
 React hook for managing a single URL parameter.
 
 - `key`: Query parameter key
 - `param`: Param encoder/decoder
-- `push`: Use pushState (true) or replaceState (false, default)
+- `options`: `UseUrlStateOptions | boolean` (boolean is legacy shorthand for `push`)
+  - `push?`: Use pushState (true) or replaceState (false, default)
+  - `debounce?`: Debounce URL writes in ms (state updates immediately)
 - Returns: `[value: T, setValue: (value: T) => void]`
 
-### `useUrlStates<P>(params: P, push?: boolean)`
+### `useUrlStates<P>(params, options?)`
 
 React hook for managing multiple URL parameters together.
 
 - `params`: Object mapping keys to Param types
-- `push`: Use pushState (true) or replaceState (false, default)
+- `options`: Same as `useUrlState`
 - Returns: `{ values, setValues }`
 
-### `useMultiUrlState<T>(key: string, param: MultiParam<T>, push?: boolean)`
+### `useMultiUrlState<T>(key, param, options?)`
 
 React hook for managing a multi-value URL parameter (repeated keys).
 
 - `key`: Query parameter key
 - `param`: MultiParam encoder/decoder
-- `push`: Use pushState (true) or replaceState (false, default)
+- `options`: Same as `useUrlState`
 - Returns: `[value: T, setValue: (value: T) => void]`
+
+### `useMultiUrlStates<P>(params, options?)`
+
+React hook for managing multiple multi-value URL parameters together.
+
+- `params`: Object mapping keys to MultiParam types
+- `options`: Same as `useUrlState`
+- Returns: `{ values, setValues }`
 
 ### `Param<T>`
 
@@ -380,6 +406,8 @@ type MultiParam<T> = {
 | Export | Description |
 |--------|-------------|
 | `BitBuffer` | Bit-level buffer for packing/unpacking arbitrary bit widths |
+| `floatParam(opts)` | Float with configurable encoding (string or base64) and precision |
+| `pointParam(opts?)` | 2D point (`{ x, y }`) with string or packed binary encoding |
 | `binaryParam(opts)` | Create param from `toBytes`/`fromBytes` converters |
 | `base64Param(toBytes, fromBytes)` | Shorthand for `binaryParam` |
 | `base64Encode(bytes, opts?)` | Encode `Uint8Array` to base64 string |
@@ -394,6 +422,8 @@ type MultiParam<T> = {
 - `parseMultiParams(source)`: Parse URL to multi-value params object
 - `getCurrentParams()`: Get current URL params (browser only)
 - `updateUrl(params, push?)`: Update URL without reloading (browser only)
+- `clearParams(strategy?)`: Clear all URL params (`'query'` or `'hash'`)
+- `notifyLocationChange()`: Manually notify hooks of a URL change (for edge cases like direct `location` assignment)
 
 ## Examples <a id="examples"></a>
 
