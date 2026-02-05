@@ -1,6 +1,6 @@
 {
   "name": "use-prms",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Type-safe URL-parameter (query and hash) management with minimal, human-readable encoding and decoding",
   "type": "module",
   "main": "./dist/index.cjs",
