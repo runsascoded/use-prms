@@ -1,12 +1,5 @@
 import { test, expect } from '@playwright/test'
 
-// Helper to check URL contains params (order-independent)
-function urlContainsParams(url: string, params: string[]): boolean {
-  const urlObj = new URL(url)
-  const searchOrHash = urlObj.search || urlObj.hash
-  return params.every(p => searchOrHash.includes(p))
-}
-
 test.describe('Query Params (/ route)', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/')
@@ -311,5 +304,75 @@ test.describe('URL preview display', () => {
 
     // Reset button should disappear
     await expect(page.locator('.url-reset')).not.toBeVisible()
+  })
+})
+
+test.describe('Debounce value stability', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/')
+  })
+
+  test('value does not revert on unrelated re-render during debounce window', async ({ page }) => {
+    const value = page.locator('[data-testid="debounce-value"]')
+
+    // Initial state
+    await expect(value).toHaveText('0')
+
+    // Set debounced value and immediately trigger unrelated re-render
+    // Both happen in the same evaluate to ensure the bump fires before debounce
+    await page.evaluate(() => {
+      const input = document.querySelector('[data-testid="debounce-input"]') as HTMLInputElement
+      const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
+      nativeInputValueSetter.call(input, '42')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      input.dispatchEvent(new Event('change', { bubbles: true }))
+
+      // Immediately trigger unrelated re-render
+      const bumpBtn = document.querySelector('[data-testid="debounce-bump"]') as HTMLButtonElement
+      bumpBtn.click()
+    })
+
+    // Value should not snap back to 0 during debounce window
+    await expect(value).toHaveText('42')
+
+    // Wait for debounce to fire, then verify URL and value
+    await page.waitForTimeout(600)
+    await expect(page).toHaveURL(/d=42/)
+    await expect(value).toHaveText('42')
+  })
+
+  test('rapid setValue calls preserve final value', async ({ page }) => {
+    const input = page.locator('[data-testid="debounce-input"]')
+    const value = page.locator('[data-testid="debounce-value"]')
+
+    // Rapid-fire value changes (simulating slider drag)
+    for (const v of [10, 20, 30, 40, 50]) {
+      await input.fill(String(v))
+    }
+
+    // Should show final value immediately
+    await expect(value).toHaveText('50')
+
+    // URL updates only once, after debounce
+    await page.waitForTimeout(600)
+    await expect(page).toHaveURL(/d=50/)
+  })
+
+  test('external navigation during debounce wins', async ({ page }) => {
+    // Navigate to a state first (so we have history to go back to)
+    await page.goto('/?n=hello')
+    await expect(page).toHaveURL('/?n=hello')
+
+    const input = page.locator('[data-testid="debounce-input"]')
+
+    // Set debounced value
+    await input.fill('99')
+
+    // Navigate back before debounce fires
+    await page.goBack()
+
+    // The back navigation should win — URL should not contain d=99
+    await page.waitForTimeout(600)
+    expect(page.url()).not.toContain('d=99')
   })
 })

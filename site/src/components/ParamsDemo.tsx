@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react'
 import { useLocation, Link } from 'react-router-dom'
 import { FaGithub, FaTimes } from 'react-icons/fa'
 import Tooltip from '@mui/material/Tooltip'
-import { clearParams, type Param } from 'use-prms'
+import { clearParams, intParam, type Param } from 'use-prms'
 import { FloatDemo } from './FloatDemo'
 
 const themes = ['light', 'dark', 'auto'] as const
@@ -652,6 +652,9 @@ const { values, setValues } = useUrlStates({
         </details>
       </section>
 
+      {/* Debounce */}
+      <DebounceSection useUrlState={useUrlState} />
+
       {/* Advanced: Binary Encoding */}
       <hr className="section-divider" />
       <h2 className="advanced-header">Advanced: Binary Encoding</h2>
@@ -665,5 +668,38 @@ const { values, setValues } = useUrlStates({
       </div>
       <FloatDemo useUrlState={useUrlState} />
     </>
+  )
+}
+
+function DebounceSection({ useUrlState }: { useUrlState: ParamValues['useUrlState'] }) {
+  const [debouncedNum, setDebouncedNum] = useUrlState('d', intParam(0), { debounce: 500 })
+  const [localCounter, setLocalCounter] = useState(0)
+
+  return (
+    <section id="section-debounce" className="section">
+      <h2>Debounce (intParam + debounce)</h2>
+      <div className="controls">
+        <div className="control-group">
+          <label>Debounced number (500ms)</label>
+          <input
+            type="number"
+            data-testid="debounce-input"
+            value={debouncedNum}
+            onChange={e => setDebouncedNum(parseInt(e.target.value) || 0)}
+          />
+          <span data-testid="debounce-value">{debouncedNum}</span>
+        </div>
+        <div className="control-group">
+          <label>Unrelated local state: {localCounter}</label>
+          <button data-testid="debounce-bump" onClick={() => setLocalCounter(n => n + 1)}>
+            Bump
+          </button>
+        </div>
+      </div>
+      <details className="code-sample">
+        <summary>Code</summary>
+        <pre>{`const [num, setNum] = useUrlState('d', intParam(0), { debounce: 500 })`}</pre>
+      </details>
+    </section>
   )
 }
