@@ -87,9 +87,10 @@ const [mode, setMode] = useUrlState('m', defStringParam('auto'))  // with defaul
 ```typescript
 const [count, setCount] = useUrlState('c', intParam(0))
 const [ratio, setRatio] = useUrlState('r', floatParam(1.0))
-const [id, setId] = useUrlState('id', optIntParam)  // number | null
-// ?c=5&r=1.5&id=123 → 5, 1.5, 123
-// (absent) → 0, 1.0, null
+const [id, setId] = useUrlState('id', optIntParam)           // number | null
+const [iso, setIso] = useUrlState('iso', optFloatParam())    // number | null
+// ?c=5&r=1.5&id=123&iso=<base64> → 5, 1.5, 123, 0.75
+// (absent) → 0, 1.0, null, null
 ```
 
 ### Enums
@@ -239,7 +240,7 @@ const myId = buf.decodeBigInt(48)
 Encode floats compactly as base64:
 
 ```typescript
-import { floatParam } from 'use-prms'
+import { floatParam, optFloatParam } from 'use-prms'
 
 // Lossless (11 chars, exact IEEE 754)
 const [zoom, setZoom] = useUrlState('z', floatParam(1.0))
@@ -249,6 +250,12 @@ const [lat, setLat] = useUrlState('lat', floatParam({
   default: 0,
   exp: 5,      // exponent bits
   mant: 22,    // mantissa bits (~7 decimal digits)
+}))
+
+// Optional (null when absent, like optIntParam)
+const [iso, setIso] = useUrlState('iso', optFloatParam())
+const [level, setLevel] = useUrlState('lv', optFloatParam({
+  encoding: 'string', decimals: 2,
 }))
 ```
 
@@ -386,6 +393,7 @@ type MultiParam<T> = {
 | `intParam(init)` | `Param<number>` | Integer with default |
 | `floatParam(init)` | `Param<number>` | Float with default |
 | `optIntParam` | `Param<number \| null>` | Optional integer |
+| `optFloatParam(opts?)` | `Param<number \| null>` | Optional float (all `floatParam` encodings) |
 | `enumParam(init, values)` | `Param<T>` | Validated enum |
 | `stringsParam(init?, delim?)` | `Param<string[]>` | Delimiter-separated strings |
 | `numberArrayParam(init?)` | `Param<number[]>` | Comma-separated numbers |
@@ -407,6 +415,7 @@ type MultiParam<T> = {
 |--------|-------------|
 | `BitBuffer` | Bit-level buffer for packing/unpacking arbitrary bit widths |
 | `floatParam(opts)` | Float with configurable encoding (string or base64) and precision |
+| `optFloatParam(opts?)` | Optional float (`null` when absent); same encoding options as `floatParam` |
 | `pointParam(opts?)` | 2D point (`{ x, y }`) with string or packed binary encoding |
 | `binaryParam(opts)` | Create param from `toBytes`/`fromBytes` converters |
 | `base64Param(toBytes, fromBytes)` | Shorthand for `binaryParam` |
