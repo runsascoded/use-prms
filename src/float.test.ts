@@ -7,6 +7,7 @@ import {
   BitBuffer,
   precisionSchemes,
   floatParam,
+  optFloatParam,
   base64FloatParam,
   pointParam,
   encodeFloatAllModes,
@@ -388,6 +389,104 @@ describe('encodePointAllModes', () => {
 
     // Binary should be shorter than string "37.7749,-122.4194"
     expect(result.base64.length).toBeLessThan(result.string.length)
+  })
+})
+
+describe('optFloatParam', () => {
+  describe('string encoding with decimals', () => {
+    const param = optFloatParam({ encoding: 'string', decimals: 2 })
+
+    it('encodes null as undefined', () => {
+      expect(param.encode(null)).toBeUndefined()
+    })
+
+    it('encodes 0 as "0.00" (not undefined)', () => {
+      expect(param.encode(0)).toBe('0.00')
+    })
+
+    it('encodes with truncation', () => {
+      expect(param.encode(3.14159)).toBe('3.14')
+    })
+
+    it('decodes undefined as null', () => {
+      expect(param.decode(undefined)).toBeNull()
+    })
+
+    it('decodes empty string as null', () => {
+      expect(param.decode('')).toBeNull()
+    })
+
+    it('decodes garbage as null', () => {
+      expect(param.decode('not-a-number')).toBeNull()
+    })
+
+    it('roundtrips', () => {
+      const values = [0, 1.23, -4.56, 100.99, 0.01]
+      for (const v of values) {
+        const encoded = param.encode(v)
+        expect(encoded).toBeDefined()
+        const decoded = param.decode(encoded)
+        expect(decoded).toBeCloseTo(v, 2)
+      }
+    })
+  })
+
+  describe('lossless base64 (default)', () => {
+    const param = optFloatParam()
+
+    it('encodes null as undefined', () => {
+      expect(param.encode(null)).toBeUndefined()
+    })
+
+    it('encodes 0 to a string (not undefined)', () => {
+      const encoded = param.encode(0)
+      expect(encoded).toBeDefined()
+      expect(encoded!.length).toBe(11)
+    })
+
+    it('roundtrips exactly', () => {
+      const values = [0, Math.PI, Math.E, -123.456789012345]
+      for (const v of values) {
+        const encoded = param.encode(v)
+        expect(encoded).toBeDefined()
+        const decoded = param.decode(encoded)
+        expect(decoded).toBe(v)
+      }
+    })
+
+    it('decodes undefined as null', () => {
+      expect(param.decode(undefined)).toBeNull()
+    })
+
+    it('decodes empty string as null', () => {
+      expect(param.decode('')).toBeNull()
+    })
+  })
+
+  describe('full precision string', () => {
+    const param = optFloatParam({ encoding: 'string' })
+
+    it('encodes 0 as "0" (not undefined)', () => {
+      expect(param.encode(0)).toBe('0')
+    })
+
+    it('encodes null as undefined', () => {
+      expect(param.encode(null)).toBeUndefined()
+    })
+
+    it('roundtrips', () => {
+      const values = [0, 3.14159, -100.5]
+      for (const v of values) {
+        const encoded = param.encode(v)
+        expect(encoded).toBeDefined()
+        const decoded = param.decode(encoded)
+        expect(decoded).toBe(v)
+      }
+    })
+
+    it('decodes garbage as null', () => {
+      expect(param.decode('xyz')).toBeNull()
+    })
   })
 })
 

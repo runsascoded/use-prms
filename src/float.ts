@@ -629,6 +629,149 @@ function createTruncatedStringParam(defaultValue: number, decimals: number): Par
 }
 
 /**
+ * Create an optional float param with configurable encoding
+ *
+ * Like `floatParam` but absent → `null` instead of a default number.
+ * `null` encodes as absent (removed from URL); any number (including 0) encodes normally.
+ *
+ * @example
+ * ```ts
+ * // Lossless base64 (default)
+ * const f = optFloatParam()
+ *
+ * // Lossy base64
+ * const f = optFloatParam({ encoding: 'base64', exp: 5, mant: 22 })
+ *
+ * // String encoding with fixed decimals
+ * const f = optFloatParam({ encoding: 'string', decimals: 2 })
+ *
+ * // Full precision string
+ * const f = optFloatParam({ encoding: 'string' })
+ * ```
+ */
+export function optFloatParam(opts: Omit<FloatParamOptions, 'default'> = {}): Param<number | null> {
+  const {
+    encoding = 'base64',
+    decimals,
+    exp,
+    mant,
+    precision,
+    alphabet,
+  } = opts
+
+  // Validate options (same as floatParam)
+  if (encoding === 'string') {
+    if (exp !== undefined || mant !== undefined || precision !== undefined) {
+      throw new Error('exp/mant/precision options are only valid with encoding: "base64"')
+    }
+  }
+
+  if (encoding === 'base64') {
+    if (decimals !== undefined) {
+      throw new Error('decimals option is only valid with encoding: "string"')
+    }
+
+    const hasExpMant = exp !== undefined || mant !== undefined
+    const hasPrecision = precision !== undefined
+
+    if (hasExpMant && hasPrecision) {
+      throw new Error('Cannot specify both exp/mant and precision')
+    }
+
+    if (hasExpMant) {
+      if (exp === undefined || mant === undefined) {
+        throw new Error('Both exp and mant must be specified together')
+      }
+      return createOptLossyBase64Param({ expBits: exp, mantBits: mant }, alphabet)
+    }
+
+    if (hasPrecision) {
+      const { exp: e, mant: m } = parsePrecisionString(precision)
+      return createOptLossyBase64Param({ expBits: e, mantBits: m }, alphabet)
+    }
+
+    return createOptLosslessBase64Param(alphabet)
+  }
+
+  // String encoding
+  if (decimals !== undefined) {
+    return createOptTruncatedStringParam(decimals)
+  }
+
+  return createOptFullStringParam()
+}
+
+function createOptLosslessBase64Param(alphabet?: Alphabet): Param<number | null> {
+  const opts = alphabet ? { alphabet } : undefined
+  return {
+    encode: (value) => {
+      if (value === null) return undefined
+      return base64Encode(floatToBytes(value), opts)
+    },
+    decode: (encoded) => {
+      if (encoded === undefined || encoded === '') return null
+      try {
+        return bytesToFloat(base64Decode(encoded, opts))
+      } catch {
+        return null
+      }
+    },
+  }
+}
+
+function createOptLossyBase64Param(scheme: PrecisionScheme, alphabet?: Alphabet): Param<number | null> {
+  const opts = alphabet ? { alphabet } : undefined
+  return {
+    encode: (value) => {
+      if (value === null) return undefined
+      const buf = new BitBuffer()
+      buf.encodeFixedPoints([value], scheme)
+      return buf.toBase64(opts)
+    },
+    decode: (encoded) => {
+      if (encoded === undefined || encoded === '') return null
+      try {
+        const buf = BitBuffer.fromBase64(encoded, opts)
+        const [value] = buf.decodeFixedPoints(1, scheme)
+        return value
+      } catch {
+        return null
+      }
+    },
+  }
+}
+
+function createOptFullStringParam(): Param<number | null> {
+  return {
+    encode: (value) => {
+      if (value === null) return undefined
+      return value.toString()
+    },
+    decode: (encoded) => {
+      if (encoded === undefined || encoded === '') return null
+      const parsed = parseFloat(encoded)
+      return isNaN(parsed) ? null : parsed
+    },
+  }
+}
+
+function createOptTruncatedStringParam(decimals: number): Param<number | null> {
+  const multiplier = Math.pow(10, decimals)
+  return {
+    encode: (value) => {
+      if (value === null) return undefined
+      const truncated = Math.round(value * multiplier) / multiplier
+      return truncated.toFixed(decimals)
+    },
+    decode: (encoded) => {
+      if (encoded === undefined || encoded === '') return null
+      const parsed = parseFloat(encoded)
+      return isNaN(parsed) ? null : parsed
+    },
+  }
+}
+
+/**
  * Convenience wrapper for base64 float encoding
  *
  * @example
