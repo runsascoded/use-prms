@@ -960,5 +960,108 @@ export function encodePointAllModes(
   }
 }
 
+/**
+ * Lat/lng/zoom (+ optional pitch/bearing) for map views
+ */
+export interface LLZ {
+  lat: number
+  lng: number
+  zoom: number
+  pitch?: number
+  bearing?: number
+}
+
+/**
+ * Options for llzParam
+ */
+export interface LLZParamOptions {
+  /** Default value when param is missing */
+  default: LLZ
+  /** Decimal places for lat/lng (default: 4, ≈11m precision) */
+  latLngDecimals?: number
+  /** Decimal places for zoom (default: 2) */
+  zoomDecimals?: number
+  /** Decimal places for pitch (default: 0) */
+  pitchDecimals?: number
+  /** Decimal places for bearing (default: 0) */
+  bearingDecimals?: number
+  /** Field delimiter (default: '_', URL-safe in both query and hash params) */
+  delimiter?: string
+}
+
+/**
+ * Create a param for encoding map view state (lat/lng/zoom, optional pitch/bearing)
+ *
+ * Uses `_` as delimiter (URL-safe in both query and hash params). When pitch/bearing
+ * are present in the default value, they're included in encoding.
+ *
+ * @example
+ * ```ts
+ * // Basic lat/lng/zoom
+ * const [view, setView] = useUrlState('ll', llzParam({
+ *   default: { lat: 40.74, lng: -74.012, zoom: 11.8 },
+ * }))
+ * // URL: ?ll=40.7400_-74.0120_11.80
+ *
+ * // With pitch and bearing
+ * const [view, setView] = useUrlState('ll', llzParam({
+ *   default: { lat: 40.74, lng: -74.012, zoom: 11.8, pitch: 0, bearing: 0 },
+ * }))
+ * // URL: ?ll=40.7400_-74.0120_11.80_0_0
+ * ```
+ */
+export function llzParam(opts: LLZParamOptions): Param<LLZ> {
+  const {
+    default: def,
+    latLngDecimals = 4,
+    zoomDecimals = 2,
+    pitchDecimals = 0,
+    bearingDecimals = 0,
+    delimiter = '_',
+  } = opts
+  const hasPB = def.pitch !== undefined || def.bearing !== undefined
+
+  function format(v: LLZ): string {
+    const parts = [
+      v.lat.toFixed(latLngDecimals),
+      v.lng.toFixed(latLngDecimals),
+      v.zoom.toFixed(zoomDecimals),
+    ]
+    if (hasPB) {
+      parts.push(
+        (v.pitch ?? 0).toFixed(pitchDecimals),
+        (v.bearing ?? 0).toFixed(bearingDecimals),
+      )
+    }
+    return parts.join(delimiter)
+  }
+
+  const defaultEncoded = format(def)
+
+  return {
+    encode(v: LLZ): string | undefined {
+      const encoded = format(v)
+      if (encoded === defaultEncoded) return undefined
+      return encoded
+    },
+    decode(s: string | undefined): LLZ {
+      if (s === undefined || s === '') return def
+      const parts = s.split(delimiter)
+      const lat = parseFloat(parts[0])
+      const lng = parseFloat(parts[1])
+      const zoom = parseFloat(parts[2])
+      if (isNaN(lat) || isNaN(lng) || isNaN(zoom)) return def
+      const result: LLZ = { lat, lng, zoom }
+      if (hasPB) {
+        const pitch = parts[3] !== undefined ? parseFloat(parts[3]) : NaN
+        const bearing = parts[4] !== undefined ? parseFloat(parts[4]) : NaN
+        result.pitch = isNaN(pitch) ? (def.pitch ?? 0) : pitch
+        result.bearing = isNaN(bearing) ? (def.bearing ?? 0) : bearing
+      }
+      return result
+    },
+  }
+}
+
 // Re-export precision schemes
 export { precisionSchemes as PRECISION_SCHEMES }

@@ -13,7 +13,7 @@ import { llzParam } from 'use-prms'
 const [view, setView] = useUrlState('ll', llzParam({
   default: { lat: 40.74, lng: -74.012, zoom: 11.8 },
 }))
-// URL: ?ll=40.7400+-74.0120+11.80
+// URL: ?ll=40.7400_-74.0120_11.80
 // Default view → absent from URL
 
 // Custom precision
@@ -29,7 +29,7 @@ llzParam({
   pitchDecimals: 0,    // default: 0
   bearingDecimals: 0,  // default: 0
 })
-// URL: ?ll=40.7400+-74.0120+11.80+45+30
+// URL: ?ll=40.7400_-74.0120_11.80+45+30
 ```
 
 ## Types
@@ -49,7 +49,7 @@ interface LLZParamOptions {
   zoomDecimals?: number    // default: 2
   pitchDecimals?: number   // default: 0
   bearingDecimals?: number // default: 0
-  delimiter?: string       // default: '+' (looks nice before positive numbers, URL-safe)
+  delimiter?: string       // default: '_' (URL-safe; '+' gets decoded as space in query strings)
 }
 ```
 
@@ -57,7 +57,7 @@ Type: `Param<LLZ>`
 
 ## Encoding
 
-`+` delimiter between fields (URL-safe, visually clean as separator before positive numbers):
+`_` delimiter between fields (URL-safe; `+` gets decoded as space in query strings):
 
 | Field | Default precision | Example |
 |-------|-------------------|---------|
@@ -67,7 +67,7 @@ Type: `Param<LLZ>`
 | pitch | 0 decimals (optional) | `45` |
 | bearing | 0 decimals (optional) | `30` |
 
-Result: `40.7400+-74.0120+11.80` (3 fields) or `40.7400+-74.0120+11.80+45+30` (5 fields).
+Result: `40.7400_-74.0120_11.80` (3 fields) or `40.7400_-74.0120_11.80_45_30` (5 fields).
 
 ### Default elision
 
@@ -84,7 +84,7 @@ When the encoded value matches the default (within precision tolerance), `encode
 
 ```typescript
 export function llzParam(opts: LLZParamOptions): Param<LLZ> {
-  const { default: def, latLngDecimals = 4, zoomDecimals = 2, pitchDecimals = 0, bearingDecimals = 0, delimiter = '+' } = opts
+  const { default: def, latLngDecimals = 4, zoomDecimals = 2, pitchDecimals = 0, bearingDecimals = 0, delimiter = '_' } = opts
   const hasPB = def.pitch !== undefined || def.bearing !== undefined
 
   function fmt(v: number, dec: number): string {
@@ -145,7 +145,7 @@ describe('llzParam', () => {
 
   test('encode non-default → delimited string', () => {
     expect(p.encode({ lat: 40.76, lng: -73.98, zoom: 13 }))
-      .toBe('40.7600+-73.9800+13.00')
+      .toBe('40.7600_-73.9800_13.00')
   })
 
   test('decode absent → default', () => {
@@ -171,7 +171,7 @@ describe('llzParam', () => {
 
     test('encode with pitch/bearing', () => {
       expect(p5.encode({ lat: 40.76, lng: -73.98, zoom: 13, pitch: 45, bearing: 30 }))
-        .toBe('40.7600+-73.9800+13.00+45+30')
+        .toBe('40.7600_-73.9800_13.00_45_30')
     })
   })
 })

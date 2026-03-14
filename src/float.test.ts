@@ -12,6 +12,7 @@ import {
   pointParam,
   encodeFloatAllModes,
   encodePointAllModes,
+  llzParam,
 } from './float'
 
 describe('toFloat/fromFloat', () => {
@@ -505,5 +506,79 @@ describe('precision schemes', () => {
     for (let i = 1; i < precisionSchemes.length; i++) {
       expect(precisionSchemes[i].mantBits).toBeGreaterThan(precisionSchemes[i - 1].mantBits)
     }
+  })
+})
+
+describe('llzParam', () => {
+  const def = { lat: 40.74, lng: -74.012, zoom: 11.8 }
+  const p = llzParam({ default: def })
+
+  it('encodes default as undefined', () => {
+    expect(p.encode(def)).toBeUndefined()
+  })
+
+  it('encodes non-default as underscore-delimited string', () => {
+    expect(p.encode({ lat: 40.76, lng: -73.98, zoom: 13 }))
+      .toBe('40.7600_-73.9800_13.00')
+  })
+
+  it('decodes undefined as default', () => {
+    expect(p.decode(undefined)).toEqual(def)
+  })
+
+  it('decodes empty string as default', () => {
+    expect(p.decode('')).toEqual(def)
+  })
+
+  it('roundtrips', () => {
+    const v = { lat: 40.7586, lng: -73.9854, zoom: 14.25 }
+    const decoded = p.decode(p.encode(v)!)
+    expect(decoded.lat).toBeCloseTo(40.7586, 4)
+    expect(decoded.lng).toBeCloseTo(-73.9854, 4)
+    expect(decoded.zoom).toBeCloseTo(14.25, 2)
+  })
+
+  it('fills defaults for missing fields', () => {
+    expect(p.decode('40.76_-73.98')).toEqual(def)
+  })
+
+  it('handles invalid input as default', () => {
+    expect(p.decode('garbage')).toEqual(def)
+  })
+
+  describe('custom precision', () => {
+    const p2 = llzParam({ default: def, latLngDecimals: 5, zoomDecimals: 1 })
+
+    it('encodes with custom decimal places', () => {
+      expect(p2.encode({ lat: 40.76, lng: -73.98, zoom: 13 }))
+        .toBe('40.76000_-73.98000_13.0')
+    })
+  })
+
+  describe('with pitch/bearing', () => {
+    const def5 = { ...def, pitch: 0, bearing: 0 }
+    const p5 = llzParam({ default: def5 })
+
+    it('encodes with pitch/bearing', () => {
+      expect(p5.encode({ lat: 40.76, lng: -73.98, zoom: 13, pitch: 45, bearing: 30 }))
+        .toBe('40.7600_-73.9800_13.00_45_30')
+    })
+
+    it('encodes default pitch/bearing as undefined', () => {
+      expect(p5.encode(def5)).toBeUndefined()
+    })
+
+    it('decodes missing pitch/bearing fields as defaults', () => {
+      const decoded = p5.decode('40.76_-73.98_13.00')
+      expect(decoded.pitch).toBe(0)
+      expect(decoded.bearing).toBe(0)
+    })
+
+    it('roundtrips with pitch/bearing', () => {
+      const v = { lat: 40.76, lng: -73.98, zoom: 13, pitch: 45, bearing: 30 }
+      expect(p5.decode(p5.encode(v)!)).toEqual({
+        lat: 40.76, lng: -73.98, zoom: 13, pitch: 45, bearing: 30,
+      })
+    })
   })
 })
