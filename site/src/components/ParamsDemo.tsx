@@ -4,6 +4,7 @@ import { FaGithub, FaTimes } from 'react-icons/fa'
 import Tooltip from '@mui/material/Tooltip'
 import { clearParams, intParam, type Param } from 'use-prms'
 import { FloatDemo } from './FloatDemo'
+import { MapDemo } from './MapDemo'
 
 const themes = ['light', 'dark', 'auto'] as const
 export type Theme = typeof themes[number]
@@ -55,6 +56,7 @@ const paramKeyColors: Record<string, number> = {
   v: 9,      // binary float - Binary Encoding section
   f: 9,      // approx float - Approximate Encoding section
   xy: 9,     // point - Point Encoding section
+  ll: 9,     // map view - Map View section
 }
 
 // Keys that should highlight together (same section)
@@ -63,7 +65,7 @@ const keyGroups: string[][] = [
   ['y', 'rg'],             // Code Mapping section
   ['tag', 'id'],           // Multi-Value section
   ['bx', 'by'],            // Batch section
-  ['v', 'f', 'xy'],        // Binary Encoding sections
+  ['v', 'f', 'xy', 'll'],  // Binary Encoding sections
 ]
 
 // Map param keys to section ids for click-to-jump
@@ -84,6 +86,7 @@ const paramKeySections: Record<string, string> = {
   v: 'section-binary',
   f: 'section-approximate',
   xy: 'section-point',
+  ll: 'section-map',
 }
 
 // Expand a set of active keys to include all keys in the same group
@@ -667,6 +670,7 @@ const { values, setValues } = useUrlStates({
         </p>
       </div>
       <FloatDemo useUrlState={useUrlState} />
+      <MapDemo useUrlState={useUrlState} />
     </>
   )
 }
