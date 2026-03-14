@@ -754,6 +754,55 @@ declare function encodePointAllModes(point: Point, opts?: {
     base64: string;
     bits: number;
 };
+/**
+ * Lat/lng/zoom (+ optional pitch/bearing) for map views
+ */
+interface LLZ {
+    lat: number;
+    lng: number;
+    zoom: number;
+    pitch?: number;
+    bearing?: number;
+}
+/**
+ * Options for llzParam
+ */
+interface LLZParamOptions {
+    /** Default value when param is missing */
+    default: LLZ;
+    /** Decimal places for lat/lng (default: 4, ≈11m precision) */
+    latLngDecimals?: number;
+    /** Decimal places for zoom (default: 2) */
+    zoomDecimals?: number;
+    /** Decimal places for pitch (default: 0) */
+    pitchDecimals?: number;
+    /** Decimal places for bearing (default: 0) */
+    bearingDecimals?: number;
+    /** Field delimiter (default: '_', URL-safe in both query and hash params) */
+    delimiter?: string;
+}
+/**
+ * Create a param for encoding map view state (lat/lng/zoom, optional pitch/bearing)
+ *
+ * Uses `_` as delimiter (URL-safe in both query and hash params). When pitch/bearing
+ * are present in the default value, they're included in encoding.
+ *
+ * @example
+ * ```ts
+ * // Basic lat/lng/zoom
+ * const [view, setView] = useUrlState('ll', llzParam({
+ *   default: { lat: 40.74, lng: -74.012, zoom: 11.8 },
+ * }))
+ * // URL: ?ll=40.7400_-74.0120_11.80
+ *
+ * // With pitch and bearing
+ * const [view, setView] = useUrlState('ll', llzParam({
+ *   default: { lat: 40.74, lng: -74.012, zoom: 11.8, pitch: 0, bearing: 0 },
+ * }))
+ * // URL: ?ll=40.7400_-74.0120_11.80_0_0
+ * ```
+ */
+declare function llzParam(opts: LLZParamOptions): Param<LLZ>;
 
 /**
  * Core types and utilities for URL parameter management
@@ -800,4 +849,4 @@ declare function getCurrentParams(): Record<string, Encoded>;
  */
 declare function updateUrl(params: Record<string, Encoded>, push?: boolean): void;
 
-export { ALPHABETS, type Alphabet, type AlphabetName, BASE64_CHARS, type Base64Options, type BinaryParamOptions, BitBuffer, type CodeMap, type Encoded, type FixedPoint, type Float, type FloatEncoding, type FloatParamOptions, type LocationStrategy, type MultiEncoded, type MultiParam, precisionSchemes as PRECISION_SCHEMES, type Pagination, type Param, type Point, type PointParamOptions, type PrecisionScheme, type UseUrlStateOptions, base64Decode, base64Encode, base64FloatParam, base64Param, binaryParam, boolParam, bytesToFloat, clearParams, codeParam, codesParam, createLookupMap, defStringParam, encodeFloatAllModes, encodePointAllModes, enumParam, floatParam, floatToBytes, fromFixedPoint, fromFloat, getCurrentParams, getDefaultStrategy, hashStrategy, intParam, multiFloatParam, multiIntParam, multiStringParam, notifyLocationChange, numberArrayParam, optFloatParam, optIntParam, paginationParam, parseMultiParams, parseParams, pointParam, precisionSchemes, queryStrategy, resolveAlphabet, resolvePrecision, serializeMultiParams, serializeParams, setDefaultStrategy, stringParam, stringsParam, toFixedPoint, toFloat, updateUrl, useMultiUrlState, useMultiUrlStates, useUrlState, useUrlStates, validateAlphabet };
+export { ALPHABETS, type Alphabet, type AlphabetName, BASE64_CHARS, type Base64Options, type BinaryParamOptions, BitBuffer, type CodeMap, type Encoded, type FixedPoint, type Float, type FloatEncoding, type FloatParamOptions, type LLZ, type LLZParamOptions, type LocationStrategy, type MultiEncoded, type MultiParam, precisionSchemes as PRECISION_SCHEMES, type Pagination, type Param, type Point, type PointParamOptions, type PrecisionScheme, type UseUrlStateOptions, base64Decode, base64Encode, base64FloatParam, base64Param, binaryParam, boolParam, bytesToFloat, clearParams, codeParam, codesParam, createLookupMap, defStringParam, encodeFloatAllModes, encodePointAllModes, enumParam, floatParam, floatToBytes, fromFixedPoint, fromFloat, getCurrentParams, getDefaultStrategy, hashStrategy, intParam, llzParam, multiFloatParam, multiIntParam, multiStringParam, notifyLocationChange, numberArrayParam, optFloatParam, optIntParam, paginationParam, parseMultiParams, parseParams, pointParam, precisionSchemes, queryStrategy, resolveAlphabet, resolvePrecision, serializeMultiParams, serializeParams, setDefaultStrategy, stringParam, stringsParam, toFixedPoint, toFloat, updateUrl, useMultiUrlState, useMultiUrlStates, useUrlState, useUrlStates, validateAlphabet };
