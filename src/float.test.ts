@@ -13,6 +13,7 @@ import {
   encodeFloatAllModes,
   encodePointAllModes,
   llzParam,
+  bboxParam,
 } from './float'
 
 describe('toFloat/fromFloat', () => {
@@ -580,5 +581,108 @@ describe('llzParam', () => {
         lat: 40.76, lng: -73.98, zoom: 13, pitch: 45, bearing: 30,
       })
     })
+  })
+
+  describe('signedDelim mode', () => {
+    const def = { lat: 40.74, lng: -74.012, zoom: 11.8, pitch: 0, bearing: 0 }
+    const p = llzParam({ default: def, signedDelim: true })
+
+    it('encodes with space before non-negative, nothing before negative', () => {
+      expect(p.encode({ lat: 40.7055, lng: -74.0682, zoom: 11.98, pitch: 27, bearing: 8 }))
+        .toBe('40.7055-74.0682 11.98 27 8')
+    })
+
+    it('encodes default as undefined', () => {
+      expect(p.encode(def)).toBeUndefined()
+    })
+
+    it('decodes URL-style "+" separators (request bodies, etc.)', () => {
+      // Browsers form-encode space → '+', so when the raw URL contains '+'
+      // separators we still decode them correctly.
+      const decoded = p.decode('40.7055-74.0682+11.98+27+8'.replace(/\+/g, ' '))
+      expect(decoded.lat).toBeCloseTo(40.7055, 4)
+      expect(decoded.lng).toBeCloseTo(-74.0682, 4)
+      expect(decoded.zoom).toBeCloseTo(11.98, 2)
+      expect(decoded.pitch).toBe(27)
+      expect(decoded.bearing).toBe(8)
+    })
+
+    it('decodes signed-delim string with negative number', () => {
+      const decoded = p.decode('40.7055-74.0682 11.98 27 8')
+      expect(decoded.lat).toBeCloseTo(40.7055, 4)
+      expect(decoded.lng).toBeCloseTo(-74.0682, 4)
+    })
+
+    it('decodes underscore-delimited input (cross-mode tolerance)', () => {
+      // `_` is also accepted as a separator.
+      expect(p.decode('40.7055_-74.0682_11.98_27_8').lat).toBeCloseTo(40.7055, 4)
+    })
+
+    it('roundtrips a full view', () => {
+      const v = { lat: 40.7586, lng: -73.9854, zoom: 14.25, pitch: 45, bearing: 30 }
+      const decoded = p.decode(p.encode(v)!)
+      expect(decoded.lat).toBeCloseTo(40.7586, 4)
+      expect(decoded.lng).toBeCloseTo(-73.9854, 4)
+      expect(decoded.zoom).toBeCloseTo(14.25, 2)
+      expect(decoded.pitch).toBe(45)
+      expect(decoded.bearing).toBe(30)
+    })
+
+    it('roundtrips with positive longitude (rare, but valid)', () => {
+      const v = { lat: -33.8688, lng: 151.2093, zoom: 12, pitch: 0, bearing: 0 }
+      const def2 = { lat: 0, lng: 0, zoom: 0, pitch: 0, bearing: 0 }
+      const p2 = llzParam({ default: def2, signedDelim: true })
+      const encoded = p2.encode(v)!
+      // Lat negative → starts with '-', no leading space.
+      // Lng positive → space before.
+      expect(encoded).toBe('-33.8688 151.2093 12.00 0 0')
+      const decoded = p2.decode(encoded)
+      expect(decoded.lat).toBeCloseTo(-33.8688, 4)
+      expect(decoded.lng).toBeCloseTo(151.2093, 4)
+    })
+  })
+})
+
+describe('bboxParam', () => {
+  const def: { sw: { lat: number; lng: number }; ne: { lat: number; lng: number } } = {
+    sw: { lat: 40.7, lng: -74.1 },
+    ne: { lat: 40.8, lng: -74.0 },
+  }
+
+  it('encodes default as undefined', () => {
+    const p = bboxParam({ default: def })
+    expect(p.encode(def)).toBeUndefined()
+  })
+
+  it('encodes underscore-delimited (default)', () => {
+    const p = bboxParam({ default: def })
+    expect(p.encode({ sw: { lat: 40.7055, lng: -74.0682 }, ne: { lat: 40.8500, lng: -73.9000 } }))
+      .toBe('40.7055_-74.0682_40.8500_-73.9000')
+  })
+
+  it('encodes signed-delim', () => {
+    const p = bboxParam({ default: def, signedDelim: true })
+    expect(p.encode({ sw: { lat: 40.7055, lng: -74.0682 }, ne: { lat: 40.8500, lng: -73.9000 } }))
+      .toBe('40.7055-74.0682 40.8500-73.9000')
+  })
+
+  it('roundtrips signed-delim', () => {
+    const p = bboxParam({ default: def, signedDelim: true })
+    const v = { sw: { lat: 40.7055, lng: -74.0682 }, ne: { lat: 40.8500, lng: -73.9000 } }
+    const decoded = p.decode(p.encode(v)!)
+    expect(decoded.sw.lat).toBeCloseTo(40.7055, 4)
+    expect(decoded.sw.lng).toBeCloseTo(-74.0682, 4)
+    expect(decoded.ne.lat).toBeCloseTo(40.8500, 4)
+    expect(decoded.ne.lng).toBeCloseTo(-73.9000, 4)
+  })
+
+  it('decodes garbage as default', () => {
+    const p = bboxParam({ default: def })
+    expect(p.decode('garbage')).toEqual(def)
+  })
+
+  it('decodes too-few-numbers as default', () => {
+    const p = bboxParam({ default: def, signedDelim: true })
+    expect(p.decode('40.7055-74.0682')).toEqual(def)
   })
 })

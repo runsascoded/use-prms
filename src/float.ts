@@ -985,8 +985,17 @@ export interface LLZParamOptions {
   pitchDecimals?: number
   /** Decimal places for bearing (default: 0) */
   bearingDecimals?: number
-  /** Field delimiter (default: '_', URL-safe in both query and hash params) */
+  /** Field delimiter (default: '_', URL-safe in both query and hash params).
+   *  Ignored when `signedDelim` is true. */
   delimiter?: string
+  /** When true, use a "signed delimiter": `' '` between non-negative numbers
+   *  (URL-encodes to `+`) and no delimiter before negative numbers (the `-`
+   *  itself separates). Reads more naturally for signed-coord lists, e.g.
+   *  `40.7400 -74.0120 11.80 0 0` (URL: `40.7400+-74.0120+11.80+0+0`). When
+   *  decoding, any of `[ +\-_]` is accepted as a separator (with `-` retained
+   *  as part of the next number).
+   */
+  signedDelim?: boolean
 }
 
 /**
@@ -1018,6 +1027,7 @@ export function llzParam(opts: LLZParamOptions): Param<LLZ> {
     pitchDecimals = 0,
     bearingDecimals = 0,
     delimiter = '_',
+    signedDelim = false,
   } = opts
   const hasPB = def.pitch !== undefined || def.bearing !== undefined
 
@@ -1033,7 +1043,15 @@ export function llzParam(opts: LLZParamOptions): Param<LLZ> {
         (v.bearing ?? 0).toFixed(bearingDecimals),
       )
     }
-    return parts.join(delimiter)
+    if (!signedDelim) return parts.join(delimiter)
+    // signed-delim: space before non-negative parts, nothing before negatives
+    // (the `-` itself separates). URL-encodes spaces as `+`.
+    let result = parts[0]
+    for (let i = 1; i < parts.length; i++) {
+      if (!parts[i].startsWith('-')) result += ' '
+      result += parts[i]
+    }
+    return result
   }
 
   const defaultEncoded = format(def)
@@ -1046,7 +1064,15 @@ export function llzParam(opts: LLZParamOptions): Param<LLZ> {
     },
     decode(s: string | undefined): LLZ {
       if (s === undefined || s === '') return def
-      const parts = s.split(delimiter)
+      let parts: string[]
+      if (signedDelim) {
+        // Match each signed float; `-` is part of the next number.
+        const matches = s.match(/-?\d+\.?\d*/g)
+        if (!matches) return def
+        parts = matches
+      } else {
+        parts = s.split(delimiter)
+      }
       const lat = parseFloat(parts[0])
       const lng = parseFloat(parts[1])
       const zoom = parseFloat(parts[2])
@@ -1059,6 +1085,93 @@ export function llzParam(opts: LLZParamOptions): Param<LLZ> {
         result.bearing = isNaN(bearing) ? (def.bearing ?? 0) : bearing
       }
       return result
+    },
+  }
+}
+
+/**
+ * Bounding box (sw, ne corners as lat/lng pairs).
+ */
+export interface BBox {
+  sw: { lat: number; lng: number }
+  ne: { lat: number; lng: number }
+}
+
+export interface BBoxParamOptions {
+  /** Default value when param is missing */
+  default: BBox
+  /** Decimal places for lat/lng (default: 4, ≈11m precision) */
+  latLngDecimals?: number
+  /** Field delimiter (default: '_'). Ignored when `signedDelim` is true. */
+  delimiter?: string
+  /** When true, use the signed-delim convention (see `llzParam`). */
+  signedDelim?: boolean
+}
+
+/**
+ * Bounding-box URL param (sw.lat, sw.lng, ne.lat, ne.lng).
+ *
+ * Useful for sharing a region independent of camera state. When the camera
+ * (`llzParam`) is what you want, use that; bbox is for "look at this area
+ * regardless of how my window is shaped."
+ *
+ * @example
+ * ```ts
+ * const [bb, setBB] = useUrlState('bb', bboxParam({
+ *   default: { sw: { lat: 40.7, lng: -74.1 }, ne: { lat: 40.8, lng: -74.0 } },
+ *   signedDelim: true,
+ * }))
+ * // URL: ?bb=40.7000-74.1000+40.8000-74.0000
+ * ```
+ */
+export function bboxParam(opts: BBoxParamOptions): Param<BBox> {
+  const {
+    default: def,
+    latLngDecimals = 4,
+    delimiter = '_',
+    signedDelim = false,
+  } = opts
+
+  function format(v: BBox): string {
+    const parts = [
+      v.sw.lat.toFixed(latLngDecimals),
+      v.sw.lng.toFixed(latLngDecimals),
+      v.ne.lat.toFixed(latLngDecimals),
+      v.ne.lng.toFixed(latLngDecimals),
+    ]
+    if (!signedDelim) return parts.join(delimiter)
+    let result = parts[0]
+    for (let i = 1; i < parts.length; i++) {
+      if (!parts[i].startsWith('-')) result += ' '
+      result += parts[i]
+    }
+    return result
+  }
+
+  const defaultEncoded = format(def)
+
+  return {
+    encode(v: BBox): string | undefined {
+      const encoded = format(v)
+      if (encoded === defaultEncoded) return undefined
+      return encoded
+    },
+    decode(s: string | undefined): BBox {
+      if (s === undefined || s === '') return def
+      let parts: string[]
+      if (signedDelim) {
+        const matches = s.match(/-?\d+\.?\d*/g)
+        if (!matches || matches.length < 4) return def
+        parts = matches
+      } else {
+        parts = s.split(delimiter)
+      }
+      const swLat = parseFloat(parts[0])
+      const swLng = parseFloat(parts[1])
+      const neLat = parseFloat(parts[2])
+      const neLng = parseFloat(parts[3])
+      if ([swLat, swLng, neLat, neLng].some(isNaN)) return def
+      return { sw: { lat: swLat, lng: swLng }, ne: { lat: neLat, lng: neLng } }
     },
   }
 }
