@@ -14,6 +14,7 @@ import {
   encodePointAllModes,
   llzParam,
   bboxParam,
+  viewStateParam,
 } from './float'
 
 describe('toFloat/fromFloat', () => {
@@ -684,5 +685,79 @@ describe('bboxParam', () => {
   it('decodes too-few-numbers as default', () => {
     const p = bboxParam({ default: def, signedDelim: true })
     expect(p.decode('40.7055-74.0682')).toEqual(def)
+  })
+})
+
+describe('viewStateParam', () => {
+  const view = { latitude: 40.7055, longitude: -74.0682, zoom: 11.98, pitch: 27, bearing: 8 }
+
+  describe('with null default', () => {
+    const p = viewStateParam({ default: null, signedDelim: true })
+
+    it('encodes null as undefined', () => {
+      expect(p.encode(null)).toBeUndefined()
+    })
+
+    it('encodes a view with signed-delim', () => {
+      expect(p.encode(view)).toBe('40.7055-74.0682 11.98 27 8')
+    })
+
+    it('decodes undefined as null (no auto-fit override)', () => {
+      expect(p.decode(undefined)).toBeNull()
+    })
+
+    it('decodes empty string as null', () => {
+      expect(p.decode('')).toBeNull()
+    })
+
+    it('decodes signed-delim string', () => {
+      const decoded = p.decode('40.7055-74.0682 11.98 27 8')
+      expect(decoded).not.toBeNull()
+      expect(decoded!.latitude).toBeCloseTo(40.7055, 4)
+      expect(decoded!.longitude).toBeCloseTo(-74.0682, 4)
+      expect(decoded!.zoom).toBeCloseTo(11.98, 2)
+      expect(decoded!.pitch).toBe(27)
+      expect(decoded!.bearing).toBe(8)
+    })
+
+    it('roundtrips', () => {
+      expect(p.decode(p.encode(view)!)).toEqual(view)
+    })
+
+    it('decodes lat/lng/zoom-only with pitch/bearing fallbacks', () => {
+      const p2 = viewStateParam({ default: null, signedDelim: true, pitchFallback: 45 })
+      const decoded = p2.decode('40.7055-74.0682 11.98')
+      expect(decoded!.pitch).toBe(45)
+      expect(decoded!.bearing).toBe(0)
+    })
+  })
+
+  describe('with concrete default', () => {
+    const def = { latitude: 0, longitude: 0, zoom: 0, pitch: 0, bearing: 0 }
+    const p = viewStateParam({ default: def, signedDelim: true })
+
+    it('encodes default as undefined', () => {
+      expect(p.encode(def)).toBeUndefined()
+    })
+
+    it('decodes garbage as default (not null)', () => {
+      expect(p.decode('garbage')).toEqual(def)
+    })
+
+    it('decodes empty string as default', () => {
+      expect(p.decode('')).toEqual(def)
+    })
+  })
+
+  describe('underscore delimiter (default)', () => {
+    const p = viewStateParam({ default: null })
+
+    it('encodes with underscores', () => {
+      expect(p.encode(view)).toBe('40.7055_-74.0682_11.98_27_8')
+    })
+
+    it('roundtrips', () => {
+      expect(p.decode(p.encode(view)!)).toEqual(view)
+    })
   })
 })

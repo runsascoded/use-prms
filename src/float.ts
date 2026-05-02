@@ -1019,6 +1019,30 @@ export interface LLZParamOptions {
  * // URL: ?ll=40.7400_-74.0120_11.80_0_0
  * ```
  */
+/** Internal: format a list of fixed-decimal numeric parts using either a
+ *  fixed delimiter or the signed-delim convention. Shared by `llzParam`,
+ *  `viewStateParam`, and `bboxParam`. */
+function formatSignedParts(parts: string[], delimiter: string, signedDelim: boolean): string {
+  if (!signedDelim) return parts.join(delimiter)
+  let result = parts[0]
+  for (let i = 1; i < parts.length; i++) {
+    if (!parts[i].startsWith('-')) result += ' '
+    result += parts[i]
+  }
+  return result
+}
+
+/** Internal: split an encoded string into numeric parts. In signedDelim mode,
+ *  uses regex match (any of `[ +\-_]` separates, `-` retained as part of the
+ *  next number). Otherwise splits on the literal delimiter. */
+function parseSignedParts(s: string, delimiter: string, signedDelim: boolean): string[] | null {
+  if (signedDelim) {
+    const matches = s.match(/-?\d+\.?\d*/g)
+    return matches && matches.length > 0 ? matches : null
+  }
+  return s.split(delimiter)
+}
+
 export function llzParam(opts: LLZParamOptions): Param<LLZ> {
   const {
     default: def,
@@ -1043,15 +1067,7 @@ export function llzParam(opts: LLZParamOptions): Param<LLZ> {
         (v.bearing ?? 0).toFixed(bearingDecimals),
       )
     }
-    if (!signedDelim) return parts.join(delimiter)
-    // signed-delim: space before non-negative parts, nothing before negatives
-    // (the `-` itself separates). URL-encodes spaces as `+`.
-    let result = parts[0]
-    for (let i = 1; i < parts.length; i++) {
-      if (!parts[i].startsWith('-')) result += ' '
-      result += parts[i]
-    }
-    return result
+    return formatSignedParts(parts, delimiter, signedDelim)
   }
 
   const defaultEncoded = format(def)
@@ -1064,15 +1080,8 @@ export function llzParam(opts: LLZParamOptions): Param<LLZ> {
     },
     decode(s: string | undefined): LLZ {
       if (s === undefined || s === '') return def
-      let parts: string[]
-      if (signedDelim) {
-        // Match each signed float; `-` is part of the next number.
-        const matches = s.match(/-?\d+\.?\d*/g)
-        if (!matches) return def
-        parts = matches
-      } else {
-        parts = s.split(delimiter)
-      }
+      const parts = parseSignedParts(s, delimiter, signedDelim)
+      if (!parts) return def
       const lat = parseFloat(parts[0])
       const lng = parseFloat(parts[1])
       const zoom = parseFloat(parts[2])
@@ -1085,6 +1094,113 @@ export function llzParam(opts: LLZParamOptions): Param<LLZ> {
         result.bearing = isNaN(bearing) ? (def.bearing ?? 0) : bearing
       }
       return result
+    },
+  }
+}
+
+/**
+ * deck.gl / MapLibre ViewState (latitude/longitude field names, full camera).
+ *
+ * Distinct from `LLZ`: deck.gl convention uses `latitude`/`longitude`
+ * (full names, not abbreviations) and treats pitch/bearing as required.
+ */
+export interface ViewState {
+  latitude: number
+  longitude: number
+  zoom: number
+  pitch: number
+  bearing: number
+}
+
+export interface ViewStateParamOptions {
+  /** Default value. When `null`, a missing param decodes as `null` (useful
+   *  for "user has not overridden the auto-fit" semantics). When a
+   *  `ViewState` is provided, missing/garbage decodes as that value. */
+  default: ViewState | null
+  /** Decimal places for lat/lng (default: 4, ≈11m precision) */
+  latLngDecimals?: number
+  /** Decimal places for zoom (default: 2) */
+  zoomDecimals?: number
+  /** Decimal places for pitch (default: 0) */
+  pitchDecimals?: number
+  /** Decimal places for bearing (default: 0) */
+  bearingDecimals?: number
+  /** Field delimiter (default: '_'). Ignored when `signedDelim` is true. */
+  delimiter?: string
+  /** Use signed-delim encoding (see `llzParam`). Recommended. */
+  signedDelim?: boolean
+  /** Pitch fallback when decoding a string with only 3 fields (lat/lng/zoom).
+   *  Default: 0. Common alternate: 45 (matches the deck.gl 3D-tilt convention
+   *  some projects bake in). Only used when `default` is null. */
+  pitchFallback?: number
+  /** Bearing fallback when decoding lat/lng/zoom-only strings. Default: 0. */
+  bearingFallback?: number
+}
+
+/**
+ * Camera-state URL param using deck.gl ViewState field names. Wraps
+ * `llzParam` internally; supports a nullable default (returns `null` when
+ * the URL param is absent, distinct from "decode to default").
+ *
+ * @example
+ * ```ts
+ * const [view, setView] = useUrlState('llz', viewStateParam({
+ *   default: null,
+ *   signedDelim: true,
+ * }))
+ * // view is `ViewState | null` — null means "no user override, use auto-fit"
+ * ```
+ */
+export function viewStateParam(opts: ViewStateParamOptions): Param<ViewState | null> {
+  const {
+    default: def,
+    latLngDecimals = 4,
+    zoomDecimals = 2,
+    pitchDecimals = 0,
+    bearingDecimals = 0,
+    delimiter = '_',
+    signedDelim = false,
+    pitchFallback = 0,
+    bearingFallback = 0,
+  } = opts
+
+  function format(v: ViewState): string {
+    const parts = [
+      v.latitude.toFixed(latLngDecimals),
+      v.longitude.toFixed(latLngDecimals),
+      v.zoom.toFixed(zoomDecimals),
+      v.pitch.toFixed(pitchDecimals),
+      v.bearing.toFixed(bearingDecimals),
+    ]
+    return formatSignedParts(parts, delimiter, signedDelim)
+  }
+
+  const defaultEncoded = def === null ? null : format(def)
+
+  return {
+    encode(v: ViewState | null): string | undefined {
+      if (v === null) return undefined
+      const encoded = format(v)
+      if (encoded === defaultEncoded) return undefined
+      return encoded
+    },
+    decode(s: string | undefined): ViewState | null {
+      if (s === undefined || s === '') return def
+      const parts = parseSignedParts(s, delimiter, signedDelim)
+      if (!parts || parts.length < 3) return def
+      const latitude = parseFloat(parts[0])
+      const longitude = parseFloat(parts[1])
+      const zoom = parseFloat(parts[2])
+      if (isNaN(latitude) || isNaN(longitude) || isNaN(zoom)) return def
+      const pitchRaw = parts[3] !== undefined ? parseFloat(parts[3]) : NaN
+      const bearingRaw = parts[4] !== undefined ? parseFloat(parts[4]) : NaN
+      return {
+        latitude,
+        longitude,
+        zoom,
+        pitch: isNaN(pitchRaw) ? (def?.pitch ?? pitchFallback) : pitchRaw,
+        bearing: isNaN(bearingRaw) ? (def?.bearing ?? bearingFallback) : bearingRaw,
+      }
     },
   }
 }
@@ -1139,13 +1255,7 @@ export function bboxParam(opts: BBoxParamOptions): Param<BBox> {
       v.ne.lat.toFixed(latLngDecimals),
       v.ne.lng.toFixed(latLngDecimals),
     ]
-    if (!signedDelim) return parts.join(delimiter)
-    let result = parts[0]
-    for (let i = 1; i < parts.length; i++) {
-      if (!parts[i].startsWith('-')) result += ' '
-      result += parts[i]
-    }
-    return result
+    return formatSignedParts(parts, delimiter, signedDelim)
   }
 
   const defaultEncoded = format(def)
@@ -1158,14 +1268,8 @@ export function bboxParam(opts: BBoxParamOptions): Param<BBox> {
     },
     decode(s: string | undefined): BBox {
       if (s === undefined || s === '') return def
-      let parts: string[]
-      if (signedDelim) {
-        const matches = s.match(/-?\d+\.?\d*/g)
-        if (!matches || matches.length < 4) return def
-        parts = matches
-      } else {
-        parts = s.split(delimiter)
-      }
+      const parts = parseSignedParts(s, delimiter, signedDelim)
+      if (!parts || parts.length < 4) return def
       const swLat = parseFloat(parts[0])
       const swLng = parseFloat(parts[1])
       const neLat = parseFloat(parts[2])
