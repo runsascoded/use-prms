@@ -778,31 +778,111 @@ interface LLZParamOptions {
     pitchDecimals?: number;
     /** Decimal places for bearing (default: 0) */
     bearingDecimals?: number;
-    /** Field delimiter (default: '_', URL-safe in both query and hash params) */
+    /** Field delimiter (default: '_', URL-safe in both query and hash params).
+     *  Ignored when `signedDelim` is true. */
     delimiter?: string;
+    /** When true, use a "signed delimiter": `' '` between non-negative numbers
+     *  (URL-encodes to `+`) and no delimiter before negative numbers (the `-`
+     *  itself separates). Reads more naturally for signed-coord lists, e.g.
+     *  `40.7400 -74.0120 11.80 0 0` (URL: `40.7400+-74.0120+11.80+0+0`). When
+     *  decoding, any of `[ +\-_]` is accepted as a separator (with `-` retained
+     *  as part of the next number).
+     */
+    signedDelim?: boolean;
+}
+declare function llzParam(opts: LLZParamOptions): Param<LLZ>;
+/**
+ * deck.gl / MapLibre ViewState (latitude/longitude field names, full camera).
+ *
+ * Distinct from `LLZ`: deck.gl convention uses `latitude`/`longitude`
+ * (full names, not abbreviations) and treats pitch/bearing as required.
+ */
+interface ViewState {
+    latitude: number;
+    longitude: number;
+    zoom: number;
+    pitch: number;
+    bearing: number;
+}
+interface ViewStateParamOptions {
+    /** Default value. When `null`, a missing param decodes as `null` (useful
+     *  for "user has not overridden the auto-fit" semantics). When a
+     *  `ViewState` is provided, missing/garbage decodes as that value. */
+    default: ViewState | null;
+    /** Decimal places for lat/lng (default: 4, ≈11m precision) */
+    latLngDecimals?: number;
+    /** Decimal places for zoom (default: 2) */
+    zoomDecimals?: number;
+    /** Decimal places for pitch (default: 0) */
+    pitchDecimals?: number;
+    /** Decimal places for bearing (default: 0) */
+    bearingDecimals?: number;
+    /** Field delimiter (default: '_'). Ignored when `signedDelim` is true. */
+    delimiter?: string;
+    /** Use signed-delim encoding (see `llzParam`). Recommended. */
+    signedDelim?: boolean;
+    /** Pitch fallback when decoding a string with only 3 fields (lat/lng/zoom).
+     *  Default: 0. Common alternate: 45 (matches the deck.gl 3D-tilt convention
+     *  some projects bake in). Only used when `default` is null. */
+    pitchFallback?: number;
+    /** Bearing fallback when decoding lat/lng/zoom-only strings. Default: 0. */
+    bearingFallback?: number;
 }
 /**
- * Create a param for encoding map view state (lat/lng/zoom, optional pitch/bearing)
- *
- * Uses `_` as delimiter (URL-safe in both query and hash params). When pitch/bearing
- * are present in the default value, they're included in encoding.
+ * Camera-state URL param using deck.gl ViewState field names. Wraps
+ * `llzParam` internally; supports a nullable default (returns `null` when
+ * the URL param is absent, distinct from "decode to default").
  *
  * @example
  * ```ts
- * // Basic lat/lng/zoom
- * const [view, setView] = useUrlState('ll', llzParam({
- *   default: { lat: 40.74, lng: -74.012, zoom: 11.8 },
+ * const [view, setView] = useUrlState('llz', viewStateParam({
+ *   default: null,
+ *   signedDelim: true,
  * }))
- * // URL: ?ll=40.7400_-74.0120_11.80
- *
- * // With pitch and bearing
- * const [view, setView] = useUrlState('ll', llzParam({
- *   default: { lat: 40.74, lng: -74.012, zoom: 11.8, pitch: 0, bearing: 0 },
- * }))
- * // URL: ?ll=40.7400_-74.0120_11.80_0_0
+ * // view is `ViewState | null` — null means "no user override, use auto-fit"
  * ```
  */
-declare function llzParam(opts: LLZParamOptions): Param<LLZ>;
+declare function viewStateParam(opts: ViewStateParamOptions): Param<ViewState | null>;
+/**
+ * Bounding box (sw, ne corners as lat/lng pairs).
+ */
+interface BBox {
+    sw: {
+        lat: number;
+        lng: number;
+    };
+    ne: {
+        lat: number;
+        lng: number;
+    };
+}
+interface BBoxParamOptions {
+    /** Default value when param is missing */
+    default: BBox;
+    /** Decimal places for lat/lng (default: 4, ≈11m precision) */
+    latLngDecimals?: number;
+    /** Field delimiter (default: '_'). Ignored when `signedDelim` is true. */
+    delimiter?: string;
+    /** When true, use the signed-delim convention (see `llzParam`). */
+    signedDelim?: boolean;
+}
+/**
+ * Bounding-box URL param (sw.lat, sw.lng, ne.lat, ne.lng).
+ *
+ * Useful for sharing a region independent of camera state. When the camera
+ * (`llzParam`) is what you want, use that; bbox is for "look at this area
+ * regardless of how my window is shaped."
+ *
+ * @example
+ * ```ts
+ * const [bb, setBB] = useUrlState('bb', bboxParam({
+ *   default: { sw: { lat: 40.7, lng: -74.1 }, ne: { lat: 40.8, lng: -74.0 } },
+ *   signedDelim: true,
+ * }))
+ * // URL: ?bb=40.7000-74.1000+40.8000-74.0000
+ * ```
+ */
+declare function bboxParam(opts: BBoxParamOptions): Param<BBox>;
 
 /**
  * Core types and utilities for URL parameter management
@@ -849,4 +929,4 @@ declare function getCurrentParams(): Record<string, Encoded>;
  */
 declare function updateUrl(params: Record<string, Encoded>, push?: boolean): void;
 
-export { ALPHABETS, type Alphabet, type AlphabetName, BASE64_CHARS, type Base64Options, type BinaryParamOptions, BitBuffer, type CodeMap, type Encoded, type FixedPoint, type Float, type FloatEncoding, type FloatParamOptions, type LLZ, type LLZParamOptions, type LocationStrategy, type MultiEncoded, type MultiParam, precisionSchemes as PRECISION_SCHEMES, type Pagination, type Param, type Point, type PointParamOptions, type PrecisionScheme, type UseUrlStateOptions, base64Decode, base64Encode, base64FloatParam, base64Param, binaryParam, boolParam, bytesToFloat, clearParams, codeParam, codesParam, createLookupMap, defStringParam, encodeFloatAllModes, encodePointAllModes, enumParam, floatParam, floatToBytes, fromFixedPoint, fromFloat, getCurrentParams, getDefaultStrategy, hashStrategy, intParam, llzParam, multiFloatParam, multiIntParam, multiStringParam, notifyLocationChange, numberArrayParam, optFloatParam, optIntParam, paginationParam, parseMultiParams, parseParams, pointParam, precisionSchemes, queryStrategy, resolveAlphabet, resolvePrecision, serializeMultiParams, serializeParams, setDefaultStrategy, stringParam, stringsParam, toFixedPoint, toFloat, updateUrl, useMultiUrlState, useMultiUrlStates, useUrlState, useUrlStates, validateAlphabet };
+export { ALPHABETS, type Alphabet, type AlphabetName, BASE64_CHARS, type BBox, type BBoxParamOptions, type Base64Options, type BinaryParamOptions, BitBuffer, type CodeMap, type Encoded, type FixedPoint, type Float, type FloatEncoding, type FloatParamOptions, type LLZ, type LLZParamOptions, type LocationStrategy, type MultiEncoded, type MultiParam, precisionSchemes as PRECISION_SCHEMES, type Pagination, type Param, type Point, type PointParamOptions, type PrecisionScheme, type UseUrlStateOptions, type ViewState, type ViewStateParamOptions, base64Decode, base64Encode, base64FloatParam, base64Param, bboxParam, binaryParam, boolParam, bytesToFloat, clearParams, codeParam, codesParam, createLookupMap, defStringParam, encodeFloatAllModes, encodePointAllModes, enumParam, floatParam, floatToBytes, fromFixedPoint, fromFloat, getCurrentParams, getDefaultStrategy, hashStrategy, intParam, llzParam, multiFloatParam, multiIntParam, multiStringParam, notifyLocationChange, numberArrayParam, optFloatParam, optIntParam, paginationParam, parseMultiParams, parseParams, pointParam, precisionSchemes, queryStrategy, resolveAlphabet, resolvePrecision, serializeMultiParams, serializeParams, setDefaultStrategy, stringParam, stringsParam, toFixedPoint, toFloat, updateUrl, useMultiUrlState, useMultiUrlStates, useUrlState, useUrlStates, validateAlphabet, viewStateParam };

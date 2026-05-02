@@ -1483,6 +1483,22 @@ function encodePointAllModes(point, opts = {}) {
     bits: buf.end
   };
 }
+function formatSignedParts(parts, delimiter, signedDelim) {
+  if (!signedDelim) return parts.join(delimiter);
+  let result = parts[0];
+  for (let i = 1; i < parts.length; i++) {
+    if (!parts[i].startsWith("-")) result += " ";
+    result += parts[i];
+  }
+  return result;
+}
+function parseSignedParts(s, delimiter, signedDelim) {
+  if (signedDelim) {
+    const matches = s.match(/-?\d+\.?\d*/g);
+    return matches && matches.length > 0 ? matches : null;
+  }
+  return s.split(delimiter);
+}
 function llzParam(opts) {
   const {
     default: def,
@@ -1490,7 +1506,8 @@ function llzParam(opts) {
     zoomDecimals = 2,
     pitchDecimals = 0,
     bearingDecimals = 0,
-    delimiter = "_"
+    delimiter = "_",
+    signedDelim = false
   } = opts;
   const hasPB = def.pitch !== void 0 || def.bearing !== void 0;
   function format(v) {
@@ -1505,7 +1522,7 @@ function llzParam(opts) {
         (v.bearing ?? 0).toFixed(bearingDecimals)
       );
     }
-    return parts.join(delimiter);
+    return formatSignedParts(parts, delimiter, signedDelim);
   }
   const defaultEncoded = format(def);
   return {
@@ -1516,7 +1533,8 @@ function llzParam(opts) {
     },
     decode(s) {
       if (s === void 0 || s === "") return def;
-      const parts = s.split(delimiter);
+      const parts = parseSignedParts(s, delimiter, signedDelim);
+      if (!parts) return def;
       const lat = parseFloat(parts[0]);
       const lng = parseFloat(parts[1]);
       const zoom = parseFloat(parts[2]);
@@ -1529,6 +1547,92 @@ function llzParam(opts) {
         result.bearing = isNaN(bearing) ? def.bearing ?? 0 : bearing;
       }
       return result;
+    }
+  };
+}
+function viewStateParam(opts) {
+  const {
+    default: def,
+    latLngDecimals = 4,
+    zoomDecimals = 2,
+    pitchDecimals = 0,
+    bearingDecimals = 0,
+    delimiter = "_",
+    signedDelim = false,
+    pitchFallback = 0,
+    bearingFallback = 0
+  } = opts;
+  function format(v) {
+    const parts = [
+      v.latitude.toFixed(latLngDecimals),
+      v.longitude.toFixed(latLngDecimals),
+      v.zoom.toFixed(zoomDecimals),
+      v.pitch.toFixed(pitchDecimals),
+      v.bearing.toFixed(bearingDecimals)
+    ];
+    return formatSignedParts(parts, delimiter, signedDelim);
+  }
+  const defaultEncoded = def === null ? null : format(def);
+  return {
+    encode(v) {
+      if (v === null) return void 0;
+      const encoded = format(v);
+      if (encoded === defaultEncoded) return void 0;
+      return encoded;
+    },
+    decode(s) {
+      if (s === void 0 || s === "") return def;
+      const parts = parseSignedParts(s, delimiter, signedDelim);
+      if (!parts || parts.length < 3) return def;
+      const latitude = parseFloat(parts[0]);
+      const longitude = parseFloat(parts[1]);
+      const zoom = parseFloat(parts[2]);
+      if (isNaN(latitude) || isNaN(longitude) || isNaN(zoom)) return def;
+      const pitchRaw = parts[3] !== void 0 ? parseFloat(parts[3]) : NaN;
+      const bearingRaw = parts[4] !== void 0 ? parseFloat(parts[4]) : NaN;
+      return {
+        latitude,
+        longitude,
+        zoom,
+        pitch: isNaN(pitchRaw) ? def?.pitch ?? pitchFallback : pitchRaw,
+        bearing: isNaN(bearingRaw) ? def?.bearing ?? bearingFallback : bearingRaw
+      };
+    }
+  };
+}
+function bboxParam(opts) {
+  const {
+    default: def,
+    latLngDecimals = 4,
+    delimiter = "_",
+    signedDelim = false
+  } = opts;
+  function format(v) {
+    const parts = [
+      v.sw.lat.toFixed(latLngDecimals),
+      v.sw.lng.toFixed(latLngDecimals),
+      v.ne.lat.toFixed(latLngDecimals),
+      v.ne.lng.toFixed(latLngDecimals)
+    ];
+    return formatSignedParts(parts, delimiter, signedDelim);
+  }
+  const defaultEncoded = format(def);
+  return {
+    encode(v) {
+      const encoded = format(v);
+      if (encoded === defaultEncoded) return void 0;
+      return encoded;
+    },
+    decode(s) {
+      if (s === void 0 || s === "") return def;
+      const parts = parseSignedParts(s, delimiter, signedDelim);
+      if (!parts || parts.length < 4) return def;
+      const swLat = parseFloat(parts[0]);
+      const swLng = parseFloat(parts[1]);
+      const neLat = parseFloat(parts[2]);
+      const neLng = parseFloat(parts[3]);
+      if ([swLat, swLng, neLat, neLng].some(isNaN)) return def;
+      return { sw: { lat: swLat, lng: swLng }, ne: { lat: neLat, lng: neLng } };
     }
   };
 }
@@ -1577,6 +1681,6 @@ function updateUrl(params, push = false) {
   window.dispatchEvent(new PopStateEvent("popstate"));
 }
 
-export { ALPHABETS, BASE64_CHARS, BitBuffer, precisionSchemes as PRECISION_SCHEMES, base64Decode, base64Encode, base64FloatParam, base64Param, binaryParam, boolParam, bytesToFloat, clearParams, codeParam, codesParam, createLookupMap, defStringParam, encodeFloatAllModes, encodePointAllModes, enumParam, floatParam, floatToBytes, fromFixedPoint, fromFloat, getCurrentParams, getDefaultStrategy, hashStrategy, intParam, llzParam, multiFloatParam, multiIntParam, multiStringParam, notifyLocationChange, numberArrayParam, optFloatParam, optIntParam, paginationParam, parseMultiParams, parseParams, pointParam, precisionSchemes, queryStrategy, resolveAlphabet, resolvePrecision, serializeMultiParams, serializeParams, setDefaultStrategy, stringParam, stringsParam, toFixedPoint, toFloat, updateUrl, useMultiUrlState, useMultiUrlStates, useUrlState, useUrlStates, validateAlphabet };
+export { ALPHABETS, BASE64_CHARS, BitBuffer, precisionSchemes as PRECISION_SCHEMES, base64Decode, base64Encode, base64FloatParam, base64Param, bboxParam, binaryParam, boolParam, bytesToFloat, clearParams, codeParam, codesParam, createLookupMap, defStringParam, encodeFloatAllModes, encodePointAllModes, enumParam, floatParam, floatToBytes, fromFixedPoint, fromFloat, getCurrentParams, getDefaultStrategy, hashStrategy, intParam, llzParam, multiFloatParam, multiIntParam, multiStringParam, notifyLocationChange, numberArrayParam, optFloatParam, optIntParam, paginationParam, parseMultiParams, parseParams, pointParam, precisionSchemes, queryStrategy, resolveAlphabet, resolvePrecision, serializeMultiParams, serializeParams, setDefaultStrategy, stringParam, stringsParam, toFixedPoint, toFloat, updateUrl, useMultiUrlState, useMultiUrlStates, useUrlState, useUrlStates, validateAlphabet, viewStateParam };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map
