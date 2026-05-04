@@ -7,6 +7,14 @@ import type { Param } from './index.js'
 import type { LocationStrategy, MultiEncoded } from './core.js'
 import { getDefaultStrategy } from './core.js'
 import type { MultiParam } from './multiParams.js'
+import {
+  classifyParam,
+  cleanUrl,
+  inspectUrl,
+  type CleanUrlPolicy,
+  type ParamDiagnostic,
+  type UrlDiagnostics,
+} from './diagnostics.js'
 
 /**
  * Options for useUrlState hook
@@ -25,6 +33,32 @@ export interface UseUrlStateOptions {
    * @default false (replaceState)
    */
   push?: boolean
+
+  /**
+   * Fired with a `ParamDiagnostic` whenever the URL value for this key
+   * changes. Use to log/warn about stale or malformed inputs without
+   * tying that to cleanup.
+   */
+  onDiagnostic?: (diag: ParamDiagnostic) => void
+}
+
+/**
+ * Options for `useUrlStates` (multi-key) — extends single-key options with
+ * URL-level reporting and cleanup.
+ */
+export interface UseUrlStatesOptions extends Omit<UseUrlStateOptions, 'onDiagnostic'> {
+  /**
+   * Fired with a `UrlDiagnostics` whenever the URL changes. Reports
+   * unrecognized keys, malformed values, and stale-format values.
+   */
+  onDiagnostics?: (diag: UrlDiagnostics) => void
+
+  /**
+   * If set, runs `cleanUrl(params, policy)` once on mount. Independent of
+   * `onDiagnostics`: callers can observe without acting, or act without
+   * observing, or both.
+   */
+  cleanOnMount?: CleanUrlPolicy
 }
 
 /**
@@ -129,12 +163,12 @@ export function useUrlState<T>(
   key: string,
   param: Param<T>,
   options: UseUrlStateOptions | boolean = {}
-): [T, (value: T) => void] {
+): [T, (value: T) => void, ParamDiagnostic] {
   // Handle legacy boolean `push` argument for backwards compatibility
   const opts: UseUrlStateOptions = typeof options === 'boolean'
     ? { push: options }
     : options
-  const { debounce: debounceMs = 0, push = false } = opts
+  const { debounce: debounceMs = 0, push = false, onDiagnostic } = opts
 
   const strategy = getDefaultStrategy()
 
@@ -270,7 +304,23 @@ export function useUrlState<T>(
     [writeToUrl, strategy, forceUpdate]
   )
 
-  return [value, setValue]
+  // Round-trip classify the URL's current raw value. Recomputed on each
+  // render — cheap (one encode + decode + string compare).
+  const diagnostic = classifyParam(param, encoded)
+
+  // Fire onDiagnostic callback when the diagnostic changes shape (state +
+  // raw). We compare a serialized signature; the diagnostic objects
+  // themselves are fresh per render.
+  const lastDiagSigRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!onDiagnostic) return
+    const sig = JSON.stringify(diagnostic)
+    if (sig === lastDiagSigRef.current) return
+    lastDiagSigRef.current = sig
+    onDiagnostic(diagnostic)
+  })
+
+  return [value, setValue, diagnostic]
 }
 
 /**
@@ -300,16 +350,17 @@ export function useUrlState<T>(
  */
 export function useUrlStates<P extends Record<string, Param<any>>>(
   params: P,
-  options: UseUrlStateOptions | boolean = {}
+  options: UseUrlStatesOptions | boolean = {}
 ): {
   values: { [K in keyof P]: P[K] extends Param<infer T> ? T : never }
   setValues: (updates: Partial<{ [K in keyof P]: P[K] extends Param<infer T> ? T : never }>) => void
+  diagnostics: UrlDiagnostics
 } {
   // Handle legacy boolean `push` argument for backwards compatibility
-  const opts: UseUrlStateOptions = typeof options === 'boolean'
+  const opts: UseUrlStatesOptions = typeof options === 'boolean'
     ? { push: options }
     : options
-  const { debounce: debounceMs = 0, push = false } = opts
+  const { debounce: debounceMs = 0, push = false, onDiagnostics, cleanOnMount } = opts
 
   const strategy = getDefaultStrategy()
 
@@ -461,7 +512,26 @@ export function useUrlStates<P extends Record<string, Param<any>>>(
     [params, writeToUrl, strategy, forceUpdate]
   )
 
-  return { values, setValues }
+  // Compute diagnostics for the current URL — recomputed each render.
+  const diagnostics = inspectUrl(params, strategy)
+
+  // Fire onDiagnostics callback when shape changes.
+  const lastDiagSigRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!onDiagnostics) return
+    const sig = JSON.stringify(diagnostics)
+    if (sig === lastDiagSigRef.current) return
+    lastDiagSigRef.current = sig
+    onDiagnostics(diagnostics)
+  })
+
+  // Run cleanUrl once on mount if a policy is provided.
+  useEffect(() => {
+    if (cleanOnMount) cleanUrl(params, cleanOnMount, strategy)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  return { values, setValues, diagnostics }
 }
 
 /**
