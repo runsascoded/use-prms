@@ -45,13 +45,17 @@ export interface NumberTupleParamOptions<T extends object> {
   default: T
   /** Field declarations, in tuple order. */
   fields: NumberTupleField<T>[]
-  /** Field delimiter (default: `'_'`). Ignored when `signedDelim` is true. */
+  /** Field delimiter for non-signDelim mode. Default: `'_'`. Ignored when
+   *  `signDelim` is true. */
   delimiter?: string
-  /** When true, use a "signed delimiter": a space (URL-encodes to `+`)
-   *  between non-negative parts, and no delimiter before negative parts (the
-   *  `-` itself separates). On decode, any of `[ +\-_]` is accepted. Reads
-   *  more naturally for signed coordinates, e.g. `40.74 -74.01 11.8`. */
-  signedDelim?: boolean
+  /** "Sign-as-delimiter" mode (default: `true`): a space (URL-encodes to
+   *  `+`) between non-negative parts, no delimiter before negative parts
+   *  (the `-` itself separates). Reads more naturally for signed
+   *  coordinates: `40.74 -74.01 11.8`. On decode, any of `[ +\-_,]` (and
+   *  other non-numeric chars) acts as a separator, so URLs in any prior
+   *  delimited format still parse correctly — encode then re-emits in the
+   *  current format, effectively auto-migrating in-place. */
+  signDelim?: boolean
   /** When false, `encode` always emits (never returns undefined even if the
    *  value matches `default`). Default: true. Useful for nullable wrappers
    *  where a synthetic default is used only for per-field fallback. */
@@ -63,8 +67,8 @@ export interface NumberTupleParamOptions<T extends object> {
  * delimiter or the signed-delim convention. Exposed for advanced reuse
  * (e.g. building custom tuple-style encodings on top).
  */
-export function formatSignedParts(parts: string[], delimiter: string, signedDelim: boolean): string {
-  if (!signedDelim) return parts.join(delimiter)
+export function formatSignedParts(parts: string[], delimiter: string, signDelim: boolean): string {
+  if (!signDelim) return parts.join(delimiter)
   let result = parts[0]
   for (let i = 1; i < parts.length; i++) {
     if (!parts[i].startsWith('-')) result += ' '
@@ -74,13 +78,13 @@ export function formatSignedParts(parts: string[], delimiter: string, signedDeli
 }
 
 /**
- * Split an encoded string into numeric parts. In `signedDelim` mode, matches
+ * Split an encoded string into numeric parts. In `signDelim` mode, matches
  * any signed-decimal substrings (so `[ +\-_]` all act as separators, with
  * `-` retained as part of the next number). Otherwise splits on the literal
  * delimiter.
  */
-export function parseSignedParts(s: string, delimiter: string, signedDelim: boolean): string[] {
-  if (signedDelim) return s.match(/-?\d+\.?\d*/g) ?? []
+export function parseSignedParts(s: string, delimiter: string, signDelim: boolean): string[] {
+  if (signDelim) return s.match(/-?\d+\.?\d*/g) ?? []
   return s.split(delimiter)
 }
 
@@ -137,8 +141,8 @@ function setPath<T extends object>(obj: T, path: string, val: number): T {
  *     { path: 'lng', decimals: 4 },
  *     { path: 'count', int: true },
  *   ],
- *   signedDelim: true,
  * })
+ * // signDelim defaults to true → e.g. `40.7400 -74.0120 5`
  * ```
  *
  * @example Nested shape (TS validates dotted paths)
@@ -160,7 +164,7 @@ export function numberTupleParam<T extends object>(opts: NumberTupleParamOptions
     default: def,
     fields,
     delimiter = '_',
-    signedDelim = false,
+    signDelim = true,
     omitDefault = true,
   } = opts
 
@@ -170,7 +174,7 @@ export function numberTupleParam<T extends object>(opts: NumberTupleParamOptions
       const n = typeof raw === 'number' ? raw : 0
       return formatNumber(n, f)
     })
-    return formatSignedParts(parts, delimiter, signedDelim)
+    return formatSignedParts(parts, delimiter, signDelim)
   }
 
   const defaultEncoded = format(def)
@@ -183,7 +187,7 @@ export function numberTupleParam<T extends object>(opts: NumberTupleParamOptions
     },
     decode(s: string | undefined): T {
       if (s === undefined || s === '') return def
-      const parts = parseSignedParts(s, delimiter, signedDelim)
+      const parts = parseSignedParts(s, delimiter, signDelim)
       let result: T = def
       for (let i = 0; i < fields.length; i++) {
         const raw = parts[i]

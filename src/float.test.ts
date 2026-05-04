@@ -519,8 +519,14 @@ describe('llzParam', () => {
     expect(p.encode(def)).toBeUndefined()
   })
 
-  it('encodes non-default as underscore-delimited string', () => {
+  it('encodes non-default in signDelim format (default)', () => {
     expect(p.encode({ lat: 40.76, lng: -73.98, zoom: 13 }))
+      .toBe('40.7600-73.9800 13.00')
+  })
+
+  it('encodes underscore-delimited when signDelim=false', () => {
+    const p2 = llzParam({ default: def, signDelim: false })
+    expect(p2.encode({ lat: 40.76, lng: -73.98, zoom: 13 }))
       .toBe('40.7600_-73.9800_13.00')
   })
 
@@ -554,7 +560,7 @@ describe('llzParam', () => {
 
     it('encodes with custom decimal places', () => {
       expect(p2.encode({ lat: 40.76, lng: -73.98, zoom: 13 }))
-        .toBe('40.76000_-73.98000_13.0')
+        .toBe('40.76000-73.98000 13.0')
     })
   })
 
@@ -564,7 +570,7 @@ describe('llzParam', () => {
 
     it('encodes with pitch/bearing', () => {
       expect(p5.encode({ lat: 40.76, lng: -73.98, zoom: 13, pitch: 45, bearing: 30 }))
-        .toBe('40.7600_-73.9800_13.00_45_30')
+        .toBe('40.7600-73.9800 13.00 45 30')
     })
 
     it('encodes default pitch/bearing as undefined', () => {
@@ -585,9 +591,9 @@ describe('llzParam', () => {
     })
   })
 
-  describe('signedDelim mode', () => {
+  describe('signDelim mode', () => {
     const def = { lat: 40.74, lng: -74.012, zoom: 11.8, pitch: 0, bearing: 0 }
-    const p = llzParam({ default: def, signedDelim: true })
+    const p = llzParam({ default: def, signDelim: true })
 
     it('encodes with space before non-negative, nothing before negative', () => {
       expect(p.encode({ lat: 40.7055, lng: -74.0682, zoom: 11.98, pitch: 27, bearing: 8 }))
@@ -633,7 +639,7 @@ describe('llzParam', () => {
     it('roundtrips with positive longitude (rare, but valid)', () => {
       const v = { lat: -33.8688, lng: 151.2093, zoom: 12, pitch: 0, bearing: 0 }
       const def2 = { lat: 0, lng: 0, zoom: 0, pitch: 0, bearing: 0 }
-      const p2 = llzParam({ default: def2, signedDelim: true })
+      const p2 = llzParam({ default: def2, signDelim: true })
       const encoded = p2.encode(v)!
       // Lat negative → starts with '-', no leading space.
       // Lng positive → space before.
@@ -656,20 +662,20 @@ describe('bboxParam', () => {
     expect(p.encode(def)).toBeUndefined()
   })
 
-  it('encodes underscore-delimited (default)', () => {
+  it('encodes signDelim format (default)', () => {
     const p = bboxParam({ default: def })
-    expect(p.encode({ sw: { lat: 40.7055, lng: -74.0682 }, ne: { lat: 40.8500, lng: -73.9000 } }))
-      .toBe('40.7055_-74.0682_40.8500_-73.9000')
-  })
-
-  it('encodes signed-delim', () => {
-    const p = bboxParam({ default: def, signedDelim: true })
     expect(p.encode({ sw: { lat: 40.7055, lng: -74.0682 }, ne: { lat: 40.8500, lng: -73.9000 } }))
       .toBe('40.7055-74.0682 40.8500-73.9000')
   })
 
+  it('encodes underscore-delimited when signDelim=false', () => {
+    const p = bboxParam({ default: def, signDelim: false })
+    expect(p.encode({ sw: { lat: 40.7055, lng: -74.0682 }, ne: { lat: 40.8500, lng: -73.9000 } }))
+      .toBe('40.7055_-74.0682_40.8500_-73.9000')
+  })
+
   it('roundtrips signed-delim', () => {
-    const p = bboxParam({ default: def, signedDelim: true })
+    const p = bboxParam({ default: def, signDelim: true })
     const v = { sw: { lat: 40.7055, lng: -74.0682 }, ne: { lat: 40.8500, lng: -73.9000 } }
     const decoded = p.decode(p.encode(v)!)
     expect(decoded.sw.lat).toBeCloseTo(40.7055, 4)
@@ -684,7 +690,7 @@ describe('bboxParam', () => {
   })
 
   it('fills defaults for missing fields (per-field fallback)', () => {
-    const p = bboxParam({ default: def, signedDelim: true })
+    const p = bboxParam({ default: def, signDelim: true })
     // sw.lat/sw.lng come from input; ne.lat/ne.lng fall back to default.
     expect(p.decode('40.7055-74.0682')).toEqual({
       sw: { lat: 40.7055, lng: -74.0682 },
@@ -697,7 +703,7 @@ describe('viewStateParam', () => {
   const view = { latitude: 40.7055, longitude: -74.0682, zoom: 11.98, pitch: 27, bearing: 8 }
 
   describe('with null default', () => {
-    const p = viewStateParam({ default: null, signedDelim: true })
+    const p = viewStateParam({ default: null, signDelim: true })
 
     it('encodes null as undefined', () => {
       expect(p.encode(null)).toBeUndefined()
@@ -730,7 +736,7 @@ describe('viewStateParam', () => {
     })
 
     it('decodes lat/lng/zoom-only with pitch/bearing fallbacks', () => {
-      const p2 = viewStateParam({ default: null, signedDelim: true, pitchFallback: 45 })
+      const p2 = viewStateParam({ default: null, signDelim: true, pitchFallback: 45 })
       const decoded = p2.decode('40.7055-74.0682 11.98')
       expect(decoded!.pitch).toBe(45)
       expect(decoded!.bearing).toBe(0)
@@ -739,7 +745,7 @@ describe('viewStateParam', () => {
 
   describe('with concrete default', () => {
     const def = { latitude: 0, longitude: 0, zoom: 0, pitch: 0, bearing: 0 }
-    const p = viewStateParam({ default: def, signedDelim: true })
+    const p = viewStateParam({ default: def, signDelim: true })
 
     it('encodes default as undefined', () => {
       expect(p.encode(def)).toBeUndefined()
@@ -754,8 +760,20 @@ describe('viewStateParam', () => {
     })
   })
 
-  describe('underscore delimiter (default)', () => {
+  describe('signDelim default', () => {
     const p = viewStateParam({ default: null })
+
+    it('encodes in signDelim format', () => {
+      expect(p.encode(view)).toBe('40.7055-74.0682 11.98 27 8')
+    })
+
+    it('roundtrips', () => {
+      expect(p.decode(p.encode(view)!)).toEqual(view)
+    })
+  })
+
+  describe('underscore delimiter (signDelim=false)', () => {
+    const p = viewStateParam({ default: null, signDelim: false })
 
     it('encodes with underscores', () => {
       expect(p.encode(view)).toBe('40.7055_-74.0682_11.98_27_8')

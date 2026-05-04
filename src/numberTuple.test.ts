@@ -3,7 +3,7 @@ import { numberTupleParam, formatSignedParts, parseSignedParts } from './numberT
 import type { NumberPath } from './numberTuple.js'
 
 describe('numberTupleParam', () => {
-  describe('flat shape, decimals encoding', () => {
+  describe('signDelim default (true)', () => {
     type V = { lat: number; lng: number; zoom: number }
     const def: V = { lat: 40.74, lng: -74.012, zoom: 11.8 }
     const p = numberTupleParam<V>({
@@ -19,21 +19,22 @@ describe('numberTupleParam', () => {
       expect(p.encode(def)).toBeUndefined()
     })
 
-    it('encodes non-default with `_` delimiter', () => {
+    it('encodes non-default in signDelim format', () => {
       expect(p.encode({ lat: 40.76, lng: -73.98, zoom: 13 }))
-        .toBe('40.7600_-73.9800_13.00')
+        .toBe('40.7600-73.9800 13.00')
     })
 
     it('decodes the full tuple', () => {
+      expect(p.decode('40.7600-73.9800 13.00')).toEqual({ lat: 40.76, lng: -73.98, zoom: 13 })
+    })
+
+    it('decodes legacy underscore-delimited input (auto-migration tolerance)', () => {
+      // Old URLs in `_`-delim format still parse correctly.
       expect(p.decode('40.76_-73.98_13.00')).toEqual({ lat: 40.76, lng: -73.98, zoom: 13 })
     })
 
     it('decodes per-field fallback for missing parts', () => {
-      expect(p.decode('40.76_-73.98')).toEqual({ lat: 40.76, lng: -73.98, zoom: def.zoom })
-    })
-
-    it('decodes per-field fallback for unparseable parts', () => {
-      expect(p.decode('40.76_garbage_13.00')).toEqual({ lat: 40.76, lng: def.lng, zoom: 13 })
+      expect(p.decode('40.7600-73.9800')).toEqual({ lat: 40.76, lng: -73.98, zoom: def.zoom })
     })
 
     it('decodes undefined / empty as default', () => {
@@ -42,7 +43,31 @@ describe('numberTupleParam', () => {
     })
   })
 
-  describe('signedDelim', () => {
+  describe('signDelim: false (legacy underscore-delim mode)', () => {
+    type V = { lat: number; lng: number; zoom: number }
+    const def: V = { lat: 40.74, lng: -74.012, zoom: 11.8 }
+    const p = numberTupleParam<V>({
+      default: def,
+      fields: [
+        { path: 'lat', decimals: 4 },
+        { path: 'lng', decimals: 4 },
+        { path: 'zoom', decimals: 2 },
+      ],
+      signDelim: false,
+    })
+
+    it('encodes with `_` delimiter', () => {
+      expect(p.encode({ lat: 40.76, lng: -73.98, zoom: 13 }))
+        .toBe('40.7600_-73.9800_13.00')
+    })
+
+    it('decodes per-field fallback for unparseable middle parts', () => {
+      // In strict-delim mode, garbage at position 1 falls back to default.lng.
+      expect(p.decode('40.76_garbage_13.00')).toEqual({ lat: 40.76, lng: def.lng, zoom: 13 })
+    })
+  })
+
+  describe('signDelim', () => {
     type V = { lat: number; lng: number; zoom: number; pitch: number; bearing: number }
     const def: V = { lat: 40.74, lng: -74.012, zoom: 11.8, pitch: 0, bearing: 0 }
     const p = numberTupleParam<V>({
@@ -54,7 +79,7 @@ describe('numberTupleParam', () => {
         { path: 'pitch', int: true },
         { path: 'bearing', int: true },
       ],
-      signedDelim: true,
+      signDelim: true,
     })
 
     it('encodes with signed-delim convention', () => {
@@ -83,7 +108,7 @@ describe('numberTupleParam', () => {
         { path: 'y', sigfigs: 3 },
         { path: 'n', int: true },
       ],
-      signedDelim: true,
+      signDelim: true,
     })
 
     it('encodes each field per its kind', () => {
@@ -119,7 +144,7 @@ describe('numberTupleParam', () => {
         { path: 'ne.lat', decimals: 2 },
         { path: 'ne.lng', decimals: 2 },
       ],
-      signedDelim: true,
+      signDelim: true,
     })
 
     it('encodes via dotted paths', () => {
@@ -150,7 +175,7 @@ describe('numberTupleParam', () => {
           { path: 'ne.lat', decimals: 2 },
           { path: 'ne.lng', decimals: 2 },
         ],
-        signedDelim: true,
+        signDelim: true,
       })
       expect(p2.decode('1.00-2.00')).toEqual({
         sw: { lat: 1, lng: -2 },
@@ -199,14 +224,14 @@ describe('formatSignedParts / parseSignedParts', () => {
     expect(parseSignedParts(s, '_', false)).toEqual(parts)
   })
 
-  it('roundtrips with signedDelim', () => {
+  it('roundtrips with signDelim', () => {
     const parts = ['1.23', '-4.56', '7.89']
     const s = formatSignedParts(parts, '_', true)
     expect(s).toBe('1.23-4.56 7.89')
     expect(parseSignedParts(s, '_', true)).toEqual(parts)
   })
 
-  it('signedDelim parse returns [] for input with no numbers', () => {
+  it('signDelim parse returns [] for input with no numbers', () => {
     expect(parseSignedParts('garbage', '_', true)).toEqual([])
   })
 })

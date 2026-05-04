@@ -847,7 +847,7 @@ export function pointParam(opts: PointParamOptions = {}): Param<Point | null> {
         { path: 'x', decimals },
         { path: 'y', decimals },
       ],
-      signedDelim: true,
+      signDelim: true,
       omitDefault: defaultPoint !== null,
     })
     return {
@@ -975,38 +975,36 @@ export interface LLZParamOptions {
   pitchDecimals?: number
   /** Decimal places for bearing (default: 0) */
   bearingDecimals?: number
-  /** Field delimiter (default: '_', URL-safe in both query and hash params).
-   *  Ignored when `signedDelim` is true. */
+  /** Field delimiter for non-signDelim mode. Default: `'_'` (URL-safe in
+   *  both query and hash params). Ignored when `signDelim` is true. */
   delimiter?: string
-  /** When true, use a "signed delimiter": `' '` between non-negative numbers
-   *  (URL-encodes to `+`) and no delimiter before negative numbers (the `-`
-   *  itself separates). Reads more naturally for signed-coord lists, e.g.
-   *  `40.7400 -74.0120 11.80 0 0` (URL: `40.7400+-74.0120+11.80+0+0`). When
-   *  decoding, any of `[ +\-_]` is accepted as a separator (with `-` retained
-   *  as part of the next number).
-   */
-  signedDelim?: boolean
+  /** "Sign-as-delimiter" mode (default: `true`): `' '` (URL-encodes to `+`)
+   *  between non-negative numbers, no delimiter before negative numbers
+   *  (the `-` itself separates). Reads naturally for signed coords:
+   *  `40.7400 -74.0120 11.80 0 0` (URL: `40.7400+-74.0120+11.80+0+0`). On
+   *  decode, any of `[ +\-_,]` (and other non-numeric chars) act as
+   *  separators, so URLs in older delimited formats still parse — encode
+   *  re-emits in the current format, auto-migrating in-place. */
+  signDelim?: boolean
 }
 
 /**
- * Create a param for encoding map view state (lat/lng/zoom, optional pitch/bearing)
- *
- * Uses `_` as delimiter (URL-safe in both query and hash params). When pitch/bearing
- * are present in the default value, they're included in encoding.
+ * Create a param for encoding map view state (lat/lng/zoom, optional
+ * pitch/bearing). Pitch/bearing are included in the encoding only when
+ * present in the default value.
  *
  * @example
  * ```ts
- * // Basic lat/lng/zoom
  * const [view, setView] = useUrlState('ll', llzParam({
  *   default: { lat: 40.74, lng: -74.012, zoom: 11.8 },
  * }))
- * // URL: ?ll=40.7400_-74.0120_11.80
+ * // URL: ?ll=40.7400+-74.0120+11.80   (signDelim default; literal ` `=`+`)
  *
  * // With pitch and bearing
  * const [view, setView] = useUrlState('ll', llzParam({
  *   default: { lat: 40.74, lng: -74.012, zoom: 11.8, pitch: 0, bearing: 0 },
  * }))
- * // URL: ?ll=40.7400_-74.0120_11.80_0_0
+ * // URL: ?ll=40.7400+-74.0120+11.80+0+0
  * ```
  */
 export function llzParam(opts: LLZParamOptions): Param<LLZ> {
@@ -1017,7 +1015,7 @@ export function llzParam(opts: LLZParamOptions): Param<LLZ> {
     pitchDecimals = 0,
     bearingDecimals = 0,
     delimiter = '_',
-    signedDelim = false,
+    signDelim = true,
   } = opts
   const hasPB = def.pitch !== undefined || def.bearing !== undefined
 
@@ -1039,7 +1037,7 @@ export function llzParam(opts: LLZParamOptions): Param<LLZ> {
     ? { ...def, pitch: def.pitch ?? 0, bearing: def.bearing ?? 0 }
     : def
 
-  return numberTupleParam<LLZ>({ default: fullDef, fields, delimiter, signedDelim })
+  return numberTupleParam<LLZ>({ default: fullDef, fields, delimiter, signDelim })
 }
 
 /**
@@ -1069,10 +1067,11 @@ export interface ViewStateParamOptions {
   pitchDecimals?: number
   /** Decimal places for bearing (default: 0) */
   bearingDecimals?: number
-  /** Field delimiter (default: '_'). Ignored when `signedDelim` is true. */
+  /** Field delimiter for non-signDelim mode. Default: `'_'`. Ignored when
+   *  `signDelim` is true. */
   delimiter?: string
-  /** Use signed-delim encoding (see `llzParam`). Recommended. */
-  signedDelim?: boolean
+  /** Sign-as-delimiter mode (default: `true`). See `llzParam` docstring. */
+  signDelim?: boolean
   /** Pitch fallback when decoding a string with only 3 fields (lat/lng/zoom).
    *  Default: 0. Common alternate: 45 (matches the deck.gl 3D-tilt convention
    *  some projects bake in). Only used when `default` is null. */
@@ -1082,15 +1081,14 @@ export interface ViewStateParamOptions {
 }
 
 /**
- * Camera-state URL param using deck.gl ViewState field names. Wraps
- * `llzParam` internally; supports a nullable default (returns `null` when
- * the URL param is absent, distinct from "decode to default").
+ * Camera-state URL param using deck.gl ViewState field names. Supports a
+ * nullable default (returns `null` when the URL param is absent, distinct
+ * from "decode to default").
  *
  * @example
  * ```ts
  * const [view, setView] = useUrlState('llz', viewStateParam({
  *   default: null,
- *   signedDelim: true,
  * }))
  * // view is `ViewState | null` — null means "no user override, use auto-fit"
  * ```
@@ -1103,7 +1101,7 @@ export function viewStateParam(opts: ViewStateParamOptions): Param<ViewState | n
     pitchDecimals = 0,
     bearingDecimals = 0,
     delimiter = '_',
-    signedDelim = false,
+    signDelim = true,
     pitchFallback = 0,
     bearingFallback = 0,
   } = opts
@@ -1127,7 +1125,7 @@ export function viewStateParam(opts: ViewStateParamOptions): Param<ViewState | n
       { path: 'bearing', decimals: bearingDecimals },
     ],
     delimiter,
-    signedDelim,
+    signDelim,
     omitDefault: def !== null,
   })
 
@@ -1139,7 +1137,7 @@ export function viewStateParam(opts: ViewStateParamOptions): Param<ViewState | n
     decode(s: string | undefined): ViewState | null {
       if (s === undefined || s === '') return def
       // Require lat/lng/zoom to be parseable; otherwise return def.
-      const parts = signedDelim
+      const parts = signDelim
         ? (s.match(/-?\d+\.?\d*/g) ?? [])
         : s.split(delimiter)
       if (parts.length < 3) return def
@@ -1163,10 +1161,11 @@ export interface BBoxParamOptions {
   default: BBox
   /** Decimal places for lat/lng (default: 4, ≈11m precision) */
   latLngDecimals?: number
-  /** Field delimiter (default: '_'). Ignored when `signedDelim` is true. */
+  /** Field delimiter for non-signDelim mode. Default: `'_'`. Ignored when
+   *  `signDelim` is true. */
   delimiter?: string
-  /** When true, use the signed-delim convention (see `llzParam`). */
-  signedDelim?: boolean
+  /** Sign-as-delimiter mode (default: `true`). See `llzParam` docstring. */
+  signDelim?: boolean
 }
 
 /**
@@ -1180,9 +1179,8 @@ export interface BBoxParamOptions {
  * ```ts
  * const [bb, setBB] = useUrlState('bb', bboxParam({
  *   default: { sw: { lat: 40.7, lng: -74.1 }, ne: { lat: 40.8, lng: -74.0 } },
- *   signedDelim: true,
  * }))
- * // URL: ?bb=40.7000-74.1000+40.8000-74.0000
+ * // URL: ?bb=40.7000-74.1000+40.8000-74.0000   (signDelim default)
  * ```
  */
 export function bboxParam(opts: BBoxParamOptions): Param<BBox> {
@@ -1190,7 +1188,7 @@ export function bboxParam(opts: BBoxParamOptions): Param<BBox> {
     default: def,
     latLngDecimals = 4,
     delimiter = '_',
-    signedDelim = false,
+    signDelim = true,
   } = opts
 
   return numberTupleParam<BBox>({
@@ -1202,7 +1200,7 @@ export function bboxParam(opts: BBoxParamOptions): Param<BBox> {
       { path: 'ne.lng', decimals: latLngDecimals },
     ],
     delimiter,
-    signedDelim,
+    signDelim,
   })
 }
 
