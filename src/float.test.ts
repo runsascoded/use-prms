@@ -540,8 +540,9 @@ describe('llzParam', () => {
     expect(decoded.zoom).toBeCloseTo(14.25, 2)
   })
 
-  it('fills defaults for missing fields', () => {
-    expect(p.decode('40.76_-73.98')).toEqual(def)
+  it('fills defaults for missing fields (per-field fallback)', () => {
+    // zoom is missing; lat/lng come from input, zoom falls back to default.
+    expect(p.decode('40.76_-73.98')).toEqual({ lat: 40.76, lng: -73.98, zoom: def.zoom })
   })
 
   it('handles invalid input as default', () => {
@@ -682,9 +683,13 @@ describe('bboxParam', () => {
     expect(p.decode('garbage')).toEqual(def)
   })
 
-  it('decodes too-few-numbers as default', () => {
+  it('fills defaults for missing fields (per-field fallback)', () => {
     const p = bboxParam({ default: def, signedDelim: true })
-    expect(p.decode('40.7055-74.0682')).toEqual(def)
+    // sw.lat/sw.lng come from input; ne.lat/ne.lng fall back to default.
+    expect(p.decode('40.7055-74.0682')).toEqual({
+      sw: { lat: 40.7055, lng: -74.0682 },
+      ne: def.ne,
+    })
   })
 })
 

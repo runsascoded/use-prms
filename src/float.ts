@@ -6,6 +6,7 @@
  */
 
 import { base64Encode, base64Decode, floatToBytes, bytesToFloat, type Base64Options, type Alphabet, resolveAlphabet, createLookupMap } from './binary.js'
+import { numberTupleParam, type NumberTupleField } from './numberTuple.js'
 
 /**
  * Decomposed IEEE 754 double-precision float
@@ -1019,30 +1020,6 @@ export interface LLZParamOptions {
  * // URL: ?ll=40.7400_-74.0120_11.80_0_0
  * ```
  */
-/** Internal: format a list of fixed-decimal numeric parts using either a
- *  fixed delimiter or the signed-delim convention. Shared by `llzParam`,
- *  `viewStateParam`, and `bboxParam`. */
-function formatSignedParts(parts: string[], delimiter: string, signedDelim: boolean): string {
-  if (!signedDelim) return parts.join(delimiter)
-  let result = parts[0]
-  for (let i = 1; i < parts.length; i++) {
-    if (!parts[i].startsWith('-')) result += ' '
-    result += parts[i]
-  }
-  return result
-}
-
-/** Internal: split an encoded string into numeric parts. In signedDelim mode,
- *  uses regex match (any of `[ +\-_]` separates, `-` retained as part of the
- *  next number). Otherwise splits on the literal delimiter. */
-function parseSignedParts(s: string, delimiter: string, signedDelim: boolean): string[] | null {
-  if (signedDelim) {
-    const matches = s.match(/-?\d+\.?\d*/g)
-    return matches && matches.length > 0 ? matches : null
-  }
-  return s.split(delimiter)
-}
-
 export function llzParam(opts: LLZParamOptions): Param<LLZ> {
   const {
     default: def,
@@ -1055,47 +1032,25 @@ export function llzParam(opts: LLZParamOptions): Param<LLZ> {
   } = opts
   const hasPB = def.pitch !== undefined || def.bearing !== undefined
 
-  function format(v: LLZ): string {
-    const parts = [
-      v.lat.toFixed(latLngDecimals),
-      v.lng.toFixed(latLngDecimals),
-      v.zoom.toFixed(zoomDecimals),
-    ]
-    if (hasPB) {
-      parts.push(
-        (v.pitch ?? 0).toFixed(pitchDecimals),
-        (v.bearing ?? 0).toFixed(bearingDecimals),
-      )
-    }
-    return formatSignedParts(parts, delimiter, signedDelim)
+  const fields: NumberTupleField<LLZ>[] = [
+    { path: 'lat', decimals: latLngDecimals },
+    { path: 'lng', decimals: latLngDecimals },
+    { path: 'zoom', decimals: zoomDecimals },
+  ]
+  if (hasPB) {
+    fields.push(
+      { path: 'pitch', decimals: pitchDecimals },
+      { path: 'bearing', decimals: bearingDecimals },
+    )
   }
 
-  const defaultEncoded = format(def)
+  // Materialize pitch/bearing on the default so the primitive's per-field
+  // fallback supplies them when missing from input.
+  const fullDef: LLZ = hasPB
+    ? { ...def, pitch: def.pitch ?? 0, bearing: def.bearing ?? 0 }
+    : def
 
-  return {
-    encode(v: LLZ): string | undefined {
-      const encoded = format(v)
-      if (encoded === defaultEncoded) return undefined
-      return encoded
-    },
-    decode(s: string | undefined): LLZ {
-      if (s === undefined || s === '') return def
-      const parts = parseSignedParts(s, delimiter, signedDelim)
-      if (!parts) return def
-      const lat = parseFloat(parts[0])
-      const lng = parseFloat(parts[1])
-      const zoom = parseFloat(parts[2])
-      if (isNaN(lat) || isNaN(lng) || isNaN(zoom)) return def
-      const result: LLZ = { lat, lng, zoom }
-      if (hasPB) {
-        const pitch = parts[3] !== undefined ? parseFloat(parts[3]) : NaN
-        const bearing = parts[4] !== undefined ? parseFloat(parts[4]) : NaN
-        result.pitch = isNaN(pitch) ? (def.pitch ?? 0) : pitch
-        result.bearing = isNaN(bearing) ? (def.bearing ?? 0) : bearing
-      }
-      return result
-    },
-  }
+  return numberTupleParam<LLZ>({ default: fullDef, fields, delimiter, signedDelim })
 }
 
 /**
@@ -1164,43 +1119,44 @@ export function viewStateParam(opts: ViewStateParamOptions): Param<ViewState | n
     bearingFallback = 0,
   } = opts
 
-  function format(v: ViewState): string {
-    const parts = [
-      v.latitude.toFixed(latLngDecimals),
-      v.longitude.toFixed(latLngDecimals),
-      v.zoom.toFixed(zoomDecimals),
-      v.pitch.toFixed(pitchDecimals),
-      v.bearing.toFixed(bearingDecimals),
-    ]
-    return formatSignedParts(parts, delimiter, signedDelim)
+  // Synthetic default for the primitive's per-field fallback. When `def` is
+  // null the primitive's omit-when-equal-default semantics are disabled
+  // (`omitDefault: false`); the synthetic only supplies pitch/bearing
+  // fallbacks for partial input.
+  const synthetic: ViewState = def ?? {
+    latitude: 0, longitude: 0, zoom: 0,
+    pitch: pitchFallback, bearing: bearingFallback,
   }
 
-  const defaultEncoded = def === null ? null : format(def)
+  const inner = numberTupleParam<ViewState>({
+    default: synthetic,
+    fields: [
+      { path: 'latitude', decimals: latLngDecimals },
+      { path: 'longitude', decimals: latLngDecimals },
+      { path: 'zoom', decimals: zoomDecimals },
+      { path: 'pitch', decimals: pitchDecimals },
+      { path: 'bearing', decimals: bearingDecimals },
+    ],
+    delimiter,
+    signedDelim,
+    omitDefault: def !== null,
+  })
 
   return {
     encode(v: ViewState | null): string | undefined {
       if (v === null) return undefined
-      const encoded = format(v)
-      if (encoded === defaultEncoded) return undefined
-      return encoded
+      return inner.encode(v)
     },
     decode(s: string | undefined): ViewState | null {
       if (s === undefined || s === '') return def
-      const parts = parseSignedParts(s, delimiter, signedDelim)
-      if (!parts || parts.length < 3) return def
-      const latitude = parseFloat(parts[0])
-      const longitude = parseFloat(parts[1])
-      const zoom = parseFloat(parts[2])
-      if (isNaN(latitude) || isNaN(longitude) || isNaN(zoom)) return def
-      const pitchRaw = parts[3] !== undefined ? parseFloat(parts[3]) : NaN
-      const bearingRaw = parts[4] !== undefined ? parseFloat(parts[4]) : NaN
-      return {
-        latitude,
-        longitude,
-        zoom,
-        pitch: isNaN(pitchRaw) ? (def?.pitch ?? pitchFallback) : pitchRaw,
-        bearing: isNaN(bearingRaw) ? (def?.bearing ?? bearingFallback) : bearingRaw,
-      }
+      // Require lat/lng/zoom to be parseable; otherwise return def.
+      const parts = signedDelim
+        ? (s.match(/-?\d+\.?\d*/g) ?? [])
+        : s.split(delimiter)
+      if (parts.length < 3) return def
+      const head = [parseFloat(parts[0]), parseFloat(parts[1]), parseFloat(parts[2])]
+      if (head.some(isNaN)) return def
+      return inner.decode(s)
     },
   }
 }
@@ -1248,36 +1204,17 @@ export function bboxParam(opts: BBoxParamOptions): Param<BBox> {
     signedDelim = false,
   } = opts
 
-  function format(v: BBox): string {
-    const parts = [
-      v.sw.lat.toFixed(latLngDecimals),
-      v.sw.lng.toFixed(latLngDecimals),
-      v.ne.lat.toFixed(latLngDecimals),
-      v.ne.lng.toFixed(latLngDecimals),
-    ]
-    return formatSignedParts(parts, delimiter, signedDelim)
-  }
-
-  const defaultEncoded = format(def)
-
-  return {
-    encode(v: BBox): string | undefined {
-      const encoded = format(v)
-      if (encoded === defaultEncoded) return undefined
-      return encoded
-    },
-    decode(s: string | undefined): BBox {
-      if (s === undefined || s === '') return def
-      const parts = parseSignedParts(s, delimiter, signedDelim)
-      if (!parts || parts.length < 4) return def
-      const swLat = parseFloat(parts[0])
-      const swLng = parseFloat(parts[1])
-      const neLat = parseFloat(parts[2])
-      const neLng = parseFloat(parts[3])
-      if ([swLat, swLng, neLat, neLng].some(isNaN)) return def
-      return { sw: { lat: swLat, lng: swLng }, ne: { lat: neLat, lng: neLng } }
-    },
-  }
+  return numberTupleParam<BBox>({
+    default: def,
+    fields: [
+      { path: 'sw.lat', decimals: latLngDecimals },
+      { path: 'sw.lng', decimals: latLngDecimals },
+      { path: 'ne.lat', decimals: latLngDecimals },
+      { path: 'ne.lng', decimals: latLngDecimals },
+    ],
+    delimiter,
+    signedDelim,
+  })
 }
 
 // Re-export precision schemes
