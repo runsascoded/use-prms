@@ -6,7 +6,7 @@
  */
 
 import { base64Encode, base64Decode, floatToBytes, bytesToFloat, type Base64Options, type Alphabet, resolveAlphabet, createLookupMap } from './binary.js'
-import { numberTupleParam, type NumberTupleField } from './numberTuple.js'
+import { numberTupleParam, parseSignedParts, type NumberTupleField } from './numberTuple.js'
 
 /**
  * Decomposed IEEE 754 double-precision float
@@ -838,8 +838,33 @@ export function pointParam(opts: PointParamOptions = {}): Param<Point | null> {
     alphabet,
   } = opts
 
+  if (encoding === 'string') {
+    // Same null-default + per-field-fallback wrapping as `viewStateParam`.
+    const synthetic: Point = defaultPoint ?? { x: 0, y: 0 }
+    const inner = numberTupleParam<Point>({
+      default: synthetic,
+      fields: [
+        { path: 'x', decimals },
+        { path: 'y', decimals },
+      ],
+      signedDelim: true,
+      omitDefault: defaultPoint !== null,
+    })
+    return {
+      encode: (point) => point === null ? undefined : inner.encode(point),
+      decode: (encoded) => {
+        if (encoded === undefined || encoded === '') return defaultPoint
+        // Require both x and y; otherwise fall back to the configured default.
+        const parts = parseSignedParts(encoded, '_', true)
+        if (parts.length < 2) return defaultPoint
+        if (isNaN(parseFloat(parts[0])) || isNaN(parseFloat(parts[1]))) return defaultPoint
+        return inner.decode(encoded)
+      },
+    }
+  }
+
+  // base64 mode (unchanged)
   const scheme = resolvePrecision(precision)
-  const multiplier = Math.pow(10, decimals)
   const base64Opts = alphabet ? { alphabet } : undefined
 
   return {
@@ -848,52 +873,16 @@ export function pointParam(opts: PointParamOptions = {}): Param<Point | null> {
       if (defaultPoint && point.x === defaultPoint.x && point.y === defaultPoint.y) {
         return undefined
       }
-
-      if (encoding === 'string') {
-        // String encoding: "x y" or "x-y" (space encodes as + in URLs)
-        // When y is negative, omit space - the minus sign acts as delimiter
-        const xTrunc = Math.round(point.x * multiplier) / multiplier
-        const yTrunc = Math.round(point.y * multiplier) / multiplier
-        // Always show full precision for consistent output length
-        const xStr = xTrunc.toFixed(decimals)
-        const yStr = yTrunc.toFixed(decimals)
-        // Only need space delimiter if y is non-negative
-        const delimiter = yTrunc >= 0 ? ' ' : ''
-        return `${xStr}${delimiter}${yStr}`
-      } else {
-        // Binary encoding with shared exponent
-        const buf = new BitBuffer()
-        buf.encodeFixedPoints([point.x, point.y], scheme)
-        return buf.toBase64(base64Opts)
-      }
+      const buf = new BitBuffer()
+      buf.encodeFixedPoints([point.x, point.y], scheme)
+      return buf.toBase64(base64Opts)
     },
     decode: (encoded) => {
       if (encoded === undefined || encoded === '') return defaultPoint
-
       try {
-        if (encoding === 'string') {
-          // Split on space (URL decoding converts + back to space)
-          // If no space, look for minus sign (not at start) as delimiter
-          let x: number, y: number
-          if (encoded.includes(' ')) {
-            const parts = encoded.split(' ')
-            if (parts.length !== 2) return defaultPoint
-            x = parseFloat(parts[0])
-            y = parseFloat(parts[1])
-          } else {
-            // Find the minus sign that delimits y (skip any leading minus for x)
-            const minusIdx = encoded.indexOf('-', encoded[0] === '-' ? 1 : 0)
-            if (minusIdx === -1) return defaultPoint
-            x = parseFloat(encoded.slice(0, minusIdx))
-            y = parseFloat(encoded.slice(minusIdx))
-          }
-          if (isNaN(x) || isNaN(y)) return defaultPoint
-          return { x, y }
-        } else {
-          const buf = BitBuffer.fromBase64(encoded, base64Opts)
-          const [x, y] = buf.decodeFixedPoints(2, scheme)
-          return { x, y }
-        }
+        const buf = BitBuffer.fromBase64(encoded, base64Opts)
+        const [x, y] = buf.decodeFixedPoints(2, scheme)
+        return { x, y }
       } catch {
         return defaultPoint
       }
