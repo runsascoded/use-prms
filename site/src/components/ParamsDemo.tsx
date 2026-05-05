@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react'
 import { useLocation, Link } from 'react-router-dom'
 import { FaGithub, FaTimes } from 'react-icons/fa'
 import Tooltip from '@mui/material/Tooltip'
-import { clearParams, intParam, type Param } from 'use-prms'
+import { clearParams, intParam, type useUrlState } from 'use-prms'
 import { FloatDemo } from './FloatDemo'
 import { MapDemo } from './MapDemo'
 
@@ -201,7 +201,7 @@ export interface ParamValues {
   batch: { bx: number; by: number }
   setBatch: (v: Partial<{ bx: number; by: number }>) => void
   // Hook for FloatDemo (passed from parent to use correct mode)
-  useUrlState: <T>(key: string, param: Param<T>, options?: { debounce?: number }) => [T, (v: T) => void]
+  useUrlState: typeof useUrlState
 }
 
 interface ParamsDemoProps extends ParamValues {

@@ -1,9 +1,9 @@
 import { useState, useCallback, useMemo, useRef } from 'react'
 import Map, { type MapRef, type ViewStateChangeEvent } from 'react-map-gl/maplibre'
-import { llzParam, type LLZ, type Param } from 'use-prms'
+import { llzParam, type LLZ, type useUrlState } from 'use-prms'
 import 'maplibre-gl/dist/maplibre-gl.css'
 
-type UseUrlParamHook = <T>(key: string, param: Param<T>, options?: { debounce?: number }) => [T, (v: T) => void]
+type UseUrlParamHook = typeof useUrlState
 
 const DEFAULT_VIEW: LLZ = { lat: 40.7580, lng: -73.9855, zoom: 12 }
 

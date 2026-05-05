@@ -8,10 +8,10 @@ import {
   base64Encode,
   pointParam,
   type Point,
-  type Param,
+  type useUrlState,
 } from 'use-prms'
 
-type UseUrlParamHook = <T>(key: string, param: Param<T>, options?: { debounce?: number }) => [T, (v: T) => void]
+type UseUrlParamHook = typeof useUrlState
 
 // Bits per decimal digit (log2(10) ≈ 3.32)
 const BITS_PER_DIGIT = Math.log2(10)
