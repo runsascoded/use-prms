@@ -209,6 +209,91 @@ declare function multiIntParam(init?: number[]): MultiParam<number[]>;
 declare function multiFloatParam(init?: number[]): MultiParam<number[]>;
 
 /**
+ * Structured reporting on the state of the URL relative to a declared param
+ * spec, plus an imperative cleanup helper. Decoupled by design: `inspectUrl`
+ * is pure (no side effects); `cleanUrl` mutates the URL but never on its own
+ * — callers opt in via policy. Together they let apps observe and (separately)
+ * normalize URL state without conflating the two concerns.
+ */
+
+/**
+ * Per-key diagnostic for a declared parameter.
+ *
+ * - `absent`: key not present in URL
+ * - `canonical`: URL value round-trips identically (encode(decode(raw)) === raw)
+ * - `stale`: URL parses cleanly but is in a non-canonical format — re-emitting would change the URL
+ * - `malformed`: URL value is garbage — decode produced the default and re-encode differs from raw
+ */
+type ParamDiagnostic = {
+    state: 'absent';
+} | {
+    state: 'canonical';
+    raw: string;
+} | {
+    state: 'stale';
+    raw: string;
+    canonical: string | undefined;
+} | {
+    state: 'malformed';
+    raw: string;
+    canonical: string | undefined;
+};
+/** A keyed pointer to a non-canonical URL value plus its canonical form. */
+interface KeyedDiagnostic {
+    key: string;
+    raw: string;
+    /** What encode(decode(raw)) produced — the form the URL would take after normalization. `undefined` means the key would be stripped. */
+    canonical: string | undefined;
+}
+/**
+ * Structured report on the URL's relationship to a declared param spec.
+ */
+interface UrlDiagnostics {
+    /** Keys present in the URL but not declared in `params`. */
+    unrecognized: string[];
+    /** Declared keys whose URL value is garbage. */
+    malformed: KeyedDiagnostic[];
+    /** Declared keys whose URL value parses but is non-canonical. */
+    stale: KeyedDiagnostic[];
+}
+/**
+ * Round-trip classify a single param's URL value. Pure helper; usable
+ * outside React.
+ *
+ * Note on the malformed/stale split: when a URL legitimately encodes the
+ * default value in a non-canonical format, this is reported as `malformed`
+ * (a benign false-positive — `cleanUrl` with `malformed: 'reset'` produces
+ * the correct outcome of stripping the key, since the value is the default).
+ */
+declare function classifyParam<T>(param: Param<T>, raw: string | undefined): ParamDiagnostic;
+/**
+ * Inspect the current URL relative to a declared param spec. Pure — does
+ * not mutate the URL.
+ */
+declare function inspectUrl(params: Record<string, Param<any>>, strategy?: LocationStrategy): UrlDiagnostics;
+/**
+ * Policy for `cleanUrl`. Each axis is independent; defaults are conservative
+ * (`'keep'` everywhere — `cleanUrl` is a no-op until the caller opts in).
+ */
+interface CleanUrlPolicy {
+    /** What to do with unrecognized keys. Default: `'keep'`. */
+    unrecognized?: 'keep' | 'strip';
+    /** What to do with malformed values. `'reset'` re-emits canonical (stripping the key when canonical is `undefined`). Default: `'keep'`. */
+    malformed?: 'keep' | 'reset';
+    /** What to do with stale values. `'normalize'` re-emits canonical. Default: `'keep'`. */
+    stale?: 'keep' | 'normalize';
+}
+/**
+ * Apply a cleanup policy to the current URL in-place (via
+ * `history.replaceState`). Returns the diagnostics observed (so the caller
+ * can log/notify based on what was acted on).
+ *
+ * Calling with the default policy (`{}`) returns diagnostics without
+ * touching the URL — equivalent to `inspectUrl`.
+ */
+declare function cleanUrl(params: Record<string, Param<any>>, policy?: CleanUrlPolicy, strategy?: LocationStrategy): UrlDiagnostics;
+
+/**
  * React hooks for managing URL parameters
  */
 
@@ -228,6 +313,29 @@ interface UseUrlStateOptions {
      * @default false (replaceState)
      */
     push?: boolean;
+    /**
+     * Fired with a `ParamDiagnostic` whenever the URL value for this key
+     * changes. Use to log/warn about stale or malformed inputs without
+     * tying that to cleanup.
+     */
+    onDiagnostic?: (diag: ParamDiagnostic) => void;
+}
+/**
+ * Options for `useUrlStates` (multi-key) — extends single-key options with
+ * URL-level reporting and cleanup.
+ */
+interface UseUrlStatesOptions extends Omit<UseUrlStateOptions, 'onDiagnostic'> {
+    /**
+     * Fired with a `UrlDiagnostics` whenever the URL changes. Reports
+     * unrecognized keys, malformed values, and stale-format values.
+     */
+    onDiagnostics?: (diag: UrlDiagnostics) => void;
+    /**
+     * If set, runs `cleanUrl(params, policy)` once on mount. Independent of
+     * `onDiagnostics`: callers can observe without acting, or act without
+     * observing, or both.
+     */
+    cleanOnMount?: CleanUrlPolicy;
 }
 /**
  * React hook for managing a single URL query parameter.
@@ -251,7 +359,7 @@ interface UseUrlStateOptions {
  * const [position, setPosition] = useUrlState('pos', floatParam(0), { debounce: 300 })
  * ```
  */
-declare function useUrlState<T>(key: string, param: Param<T>, options?: UseUrlStateOptions | boolean): [T, (value: T) => void];
+declare function useUrlState<T>(key: string, param: Param<T>, options?: UseUrlStateOptions | boolean): [T, (value: T) => void, ParamDiagnostic];
 /**
  * React hook for managing multiple URL query parameters together.
  * Updates are batched into a single history entry.
@@ -277,13 +385,14 @@ declare function useUrlState<T>(key: string, param: Param<T>, options?: UseUrlSt
  * setValues({ zoom: true, count: 20 })
  * ```
  */
-declare function useUrlStates<P extends Record<string, Param<any>>>(params: P, options?: UseUrlStateOptions | boolean): {
+declare function useUrlStates<P extends Record<string, Param<any>>>(params: P, options?: UseUrlStatesOptions | boolean): {
     values: {
         [K in keyof P]: P[K] extends Param<infer T> ? T : never;
     };
     setValues: (updates: Partial<{
         [K in keyof P]: P[K] extends Param<infer T> ? T : never;
     }>) => void;
+    diagnostics: UrlDiagnostics;
 };
 /**
  * React hook for managing a single multi-value URL parameter.
@@ -778,18 +887,37 @@ interface LLZParamOptions {
     pitchDecimals?: number;
     /** Decimal places for bearing (default: 0) */
     bearingDecimals?: number;
-    /** Field delimiter (default: '_', URL-safe in both query and hash params).
-     *  Ignored when `signedDelim` is true. */
+    /** Field delimiter for non-signDelim mode. Default: `'_'` (URL-safe in
+     *  both query and hash params). Ignored when `signDelim` is true. */
     delimiter?: string;
-    /** When true, use a "signed delimiter": `' '` between non-negative numbers
-     *  (URL-encodes to `+`) and no delimiter before negative numbers (the `-`
-     *  itself separates). Reads more naturally for signed-coord lists, e.g.
-     *  `40.7400 -74.0120 11.80 0 0` (URL: `40.7400+-74.0120+11.80+0+0`). When
-     *  decoding, any of `[ +\-_]` is accepted as a separator (with `-` retained
-     *  as part of the next number).
-     */
-    signedDelim?: boolean;
+    /** "Sign-as-delimiter" mode (default: `true`): `' '` (URL-encodes to `+`)
+     *  between non-negative numbers, no delimiter before negative numbers
+     *  (the `-` itself separates). Reads naturally for signed coords:
+     *  `40.7400 -74.0120 11.80 0 0` (URL: `40.7400+-74.0120+11.80+0+0`). On
+     *  decode, any of `[ +\-_,]` (and other non-numeric chars) act as
+     *  separators, so URLs in older delimited formats still parse — encode
+     *  re-emits in the current format, auto-migrating in-place. */
+    signDelim?: boolean;
 }
+/**
+ * Create a param for encoding map view state (lat/lng/zoom, optional
+ * pitch/bearing). Pitch/bearing are included in the encoding only when
+ * present in the default value.
+ *
+ * @example
+ * ```ts
+ * const [view, setView] = useUrlState('ll', llzParam({
+ *   default: { lat: 40.74, lng: -74.012, zoom: 11.8 },
+ * }))
+ * // URL: ?ll=40.7400+-74.0120+11.80   (signDelim default; literal ` `=`+`)
+ *
+ * // With pitch and bearing
+ * const [view, setView] = useUrlState('ll', llzParam({
+ *   default: { lat: 40.74, lng: -74.012, zoom: 11.8, pitch: 0, bearing: 0 },
+ * }))
+ * // URL: ?ll=40.7400+-74.0120+11.80+0+0
+ * ```
+ */
 declare function llzParam(opts: LLZParamOptions): Param<LLZ>;
 /**
  * deck.gl / MapLibre ViewState (latitude/longitude field names, full camera).
@@ -817,10 +945,11 @@ interface ViewStateParamOptions {
     pitchDecimals?: number;
     /** Decimal places for bearing (default: 0) */
     bearingDecimals?: number;
-    /** Field delimiter (default: '_'). Ignored when `signedDelim` is true. */
+    /** Field delimiter for non-signDelim mode. Default: `'_'`. Ignored when
+     *  `signDelim` is true. */
     delimiter?: string;
-    /** Use signed-delim encoding (see `llzParam`). Recommended. */
-    signedDelim?: boolean;
+    /** Sign-as-delimiter mode (default: `true`). See `llzParam` docstring. */
+    signDelim?: boolean;
     /** Pitch fallback when decoding a string with only 3 fields (lat/lng/zoom).
      *  Default: 0. Common alternate: 45 (matches the deck.gl 3D-tilt convention
      *  some projects bake in). Only used when `default` is null. */
@@ -829,15 +958,14 @@ interface ViewStateParamOptions {
     bearingFallback?: number;
 }
 /**
- * Camera-state URL param using deck.gl ViewState field names. Wraps
- * `llzParam` internally; supports a nullable default (returns `null` when
- * the URL param is absent, distinct from "decode to default").
+ * Camera-state URL param using deck.gl ViewState field names. Supports a
+ * nullable default (returns `null` when the URL param is absent, distinct
+ * from "decode to default").
  *
  * @example
  * ```ts
  * const [view, setView] = useUrlState('llz', viewStateParam({
  *   default: null,
- *   signedDelim: true,
  * }))
  * // view is `ViewState | null` — null means "no user override, use auto-fit"
  * ```
@@ -861,10 +989,11 @@ interface BBoxParamOptions {
     default: BBox;
     /** Decimal places for lat/lng (default: 4, ≈11m precision) */
     latLngDecimals?: number;
-    /** Field delimiter (default: '_'). Ignored when `signedDelim` is true. */
+    /** Field delimiter for non-signDelim mode. Default: `'_'`. Ignored when
+     *  `signDelim` is true. */
     delimiter?: string;
-    /** When true, use the signed-delim convention (see `llzParam`). */
-    signedDelim?: boolean;
+    /** Sign-as-delimiter mode (default: `true`). See `llzParam` docstring. */
+    signDelim?: boolean;
 }
 /**
  * Bounding-box URL param (sw.lat, sw.lng, ne.lat, ne.lng).
@@ -877,12 +1006,120 @@ interface BBoxParamOptions {
  * ```ts
  * const [bb, setBB] = useUrlState('bb', bboxParam({
  *   default: { sw: { lat: 40.7, lng: -74.1 }, ne: { lat: 40.8, lng: -74.0 } },
- *   signedDelim: true,
  * }))
- * // URL: ?bb=40.7000-74.1000+40.8000-74.0000
+ * // URL: ?bb=40.7000-74.1000+40.8000-74.0000   (signDelim default)
  * ```
  */
 declare function bboxParam(opts: BBoxParamOptions): Param<BBox>;
+
+/**
+ * Generic primitive for URL params that pack a heterogeneous tuple of
+ * numbers (each with its own encoding — fixed decimals, significant figures,
+ * or integer truncation) into a single delimited string. Subsumes the
+ * pattern used by `llzParam`, `bboxParam`, `viewStateParam`, and similar
+ * factories.
+ */
+
+/**
+ * Encoding for a single number field within a tuple. Exactly one of
+ * `decimals`, `sigfigs`, or `int` should be set.
+ */
+type NumberFieldEncoding = {
+    decimals: number;
+    sigfigs?: undefined;
+    int?: undefined;
+} | {
+    sigfigs: number;
+    decimals?: undefined;
+    int?: undefined;
+} | {
+    int: true;
+    decimals?: undefined;
+    sigfigs?: undefined;
+};
+/**
+ * Recursive type extracting dotted paths to `number`-valued leaves of `T`.
+ *
+ * @example
+ * type P = NumberPath<{ x: number; nested: { lat: number; name: string } }>
+ * // P = 'x' | 'nested.lat'  (note: 'nested.name' excluded since string)
+ */
+type NumberPath<T> = NumberPathRec<T, ''>;
+type NumberPathRec<T, P extends string> = NonNullable<T> extends number ? P extends '' ? never : P : NonNullable<T> extends object ? {
+    [K in keyof NonNullable<T> & string]: NumberPathRec<NonNullable<T>[K], P extends '' ? K : `${P}.${K}`>;
+}[keyof NonNullable<T> & string] : never;
+/** A field declaration: where in `T` the number lives, and how to format it. */
+type NumberTupleField<T> = NumberFieldEncoding & {
+    path: NumberPath<T>;
+};
+interface NumberTupleParamOptions<T extends object> {
+    /** Default value. Returned (cloned) when decoding missing/empty input.
+     *  Also used per-field as fallback for any field whose part is missing or
+     *  unparseable. */
+    default: T;
+    /** Field declarations, in tuple order. */
+    fields: NumberTupleField<T>[];
+    /** Field delimiter for non-signDelim mode. Default: `'_'`. Ignored when
+     *  `signDelim` is true. */
+    delimiter?: string;
+    /** "Sign-as-delimiter" mode (default: `true`): a space (URL-encodes to
+     *  `+`) between non-negative parts, no delimiter before negative parts
+     *  (the `-` itself separates). Reads more naturally for signed
+     *  coordinates: `40.74 -74.01 11.8`. On decode, any of `[ +\-_,]` (and
+     *  other non-numeric chars) acts as a separator, so URLs in any prior
+     *  delimited format still parse correctly — encode then re-emits in the
+     *  current format, effectively auto-migrating in-place. */
+    signDelim?: boolean;
+    /** When false, `encode` always emits (never returns undefined even if the
+     *  value matches `default`). Default: true. Useful for nullable wrappers
+     *  where a synthetic default is used only for per-field fallback. */
+    omitDefault?: boolean;
+}
+/**
+ * Format a list of numeric parts into a single string, using either a fixed
+ * delimiter or the signed-delim convention. Exposed for advanced reuse
+ * (e.g. building custom tuple-style encodings on top).
+ */
+declare function formatSignedParts(parts: string[], delimiter: string, signDelim: boolean): string;
+/**
+ * Split an encoded string into numeric parts. In `signDelim` mode, matches
+ * any signed-decimal substrings (so `[ +\-_]` all act as separators, with
+ * `-` retained as part of the next number). Otherwise splits on the literal
+ * delimiter.
+ */
+declare function parseSignedParts(s: string, delimiter: string, signDelim: boolean): string[];
+/**
+ * Create a `Param<T>` that encodes a tuple of numbers (each at a typed path
+ * within `T`) into a single delimited string.
+ *
+ * @example Flat shape, mixed encodings
+ * ```ts
+ * const p = numberTupleParam<{ lat: number; lng: number; count: number }>({
+ *   default: { lat: 0, lng: 0, count: 0 },
+ *   fields: [
+ *     { path: 'lat', decimals: 4 },
+ *     { path: 'lng', decimals: 4 },
+ *     { path: 'count', int: true },
+ *   ],
+ * })
+ * // signDelim defaults to true → e.g. `40.7400 -74.0120 5`
+ * ```
+ *
+ * @example Nested shape (TS validates dotted paths)
+ * ```ts
+ * type BBox = { sw: { lat: number; lng: number }; ne: { lat: number; lng: number } }
+ * const p = numberTupleParam<BBox>({
+ *   default: { sw: { lat: 0, lng: 0 }, ne: { lat: 0, lng: 0 } },
+ *   fields: [
+ *     { path: 'sw.lat', decimals: 4 },
+ *     { path: 'sw.lng', decimals: 4 },
+ *     { path: 'ne.lat', decimals: 4 },
+ *     { path: 'ne.lng', decimals: 4 },
+ *   ],
+ * })
+ * ```
+ */
+declare function numberTupleParam<T extends object>(opts: NumberTupleParamOptions<T>): Param<T>;
 
 /**
  * Core types and utilities for URL parameter management
@@ -929,4 +1166,4 @@ declare function getCurrentParams(): Record<string, Encoded>;
  */
 declare function updateUrl(params: Record<string, Encoded>, push?: boolean): void;
 
-export { ALPHABETS, type Alphabet, type AlphabetName, BASE64_CHARS, type BBox, type BBoxParamOptions, type Base64Options, type BinaryParamOptions, BitBuffer, type CodeMap, type Encoded, type FixedPoint, type Float, type FloatEncoding, type FloatParamOptions, type LLZ, type LLZParamOptions, type LocationStrategy, type MultiEncoded, type MultiParam, precisionSchemes as PRECISION_SCHEMES, type Pagination, type Param, type Point, type PointParamOptions, type PrecisionScheme, type UseUrlStateOptions, type ViewState, type ViewStateParamOptions, base64Decode, base64Encode, base64FloatParam, base64Param, bboxParam, binaryParam, boolParam, bytesToFloat, clearParams, codeParam, codesParam, createLookupMap, defStringParam, encodeFloatAllModes, encodePointAllModes, enumParam, floatParam, floatToBytes, fromFixedPoint, fromFloat, getCurrentParams, getDefaultStrategy, hashStrategy, intParam, llzParam, multiFloatParam, multiIntParam, multiStringParam, notifyLocationChange, numberArrayParam, optFloatParam, optIntParam, paginationParam, parseMultiParams, parseParams, pointParam, precisionSchemes, queryStrategy, resolveAlphabet, resolvePrecision, serializeMultiParams, serializeParams, setDefaultStrategy, stringParam, stringsParam, toFixedPoint, toFloat, updateUrl, useMultiUrlState, useMultiUrlStates, useUrlState, useUrlStates, validateAlphabet, viewStateParam };
+export { ALPHABETS, type Alphabet, type AlphabetName, BASE64_CHARS, type BBox, type BBoxParamOptions, type Base64Options, type BinaryParamOptions, BitBuffer, type CleanUrlPolicy, type CodeMap, type Encoded, type FixedPoint, type Float, type FloatEncoding, type FloatParamOptions, type KeyedDiagnostic, type LLZ, type LLZParamOptions, type LocationStrategy, type MultiEncoded, type MultiParam, type NumberFieldEncoding, type NumberPath, type NumberTupleField, type NumberTupleParamOptions, precisionSchemes as PRECISION_SCHEMES, type Pagination, type Param, type ParamDiagnostic, type Point, type PointParamOptions, type PrecisionScheme, type UrlDiagnostics, type UseUrlStateOptions, type UseUrlStatesOptions, type ViewState, type ViewStateParamOptions, base64Decode, base64Encode, base64FloatParam, base64Param, bboxParam, binaryParam, boolParam, bytesToFloat, classifyParam, cleanUrl, clearParams, codeParam, codesParam, createLookupMap, defStringParam, encodeFloatAllModes, encodePointAllModes, enumParam, floatParam, floatToBytes, formatSignedParts, fromFixedPoint, fromFloat, getCurrentParams, getDefaultStrategy, hashStrategy, inspectUrl, intParam, llzParam, multiFloatParam, multiIntParam, multiStringParam, notifyLocationChange, numberArrayParam, numberTupleParam, optFloatParam, optIntParam, paginationParam, parseMultiParams, parseParams, parseSignedParts, pointParam, precisionSchemes, queryStrategy, resolveAlphabet, resolvePrecision, serializeMultiParams, serializeParams, setDefaultStrategy, stringParam, stringsParam, toFixedPoint, toFloat, updateUrl, useMultiUrlState, useMultiUrlStates, useUrlState, useUrlStates, validateAlphabet, viewStateParam };

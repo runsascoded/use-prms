@@ -308,6 +308,63 @@ function multiFloatParam(init = []) {
 function arraysEqual(a, b) {
   return a.length === b.length && a.every((v, i) => v === b[i]);
 }
+
+// src/diagnostics.ts
+function classifyParam(param, raw) {
+  if (raw === void 0) return { state: "absent" };
+  const decoded = param.decode(raw);
+  const reencoded = param.encode(decoded);
+  if (raw === reencoded) return { state: "canonical", raw };
+  const defaultEncoded = param.encode(param.decode(void 0));
+  if (reencoded === defaultEncoded) return { state: "malformed", raw, canonical: reencoded };
+  return { state: "stale", raw, canonical: reencoded };
+}
+function inspectUrl(params, strategy = getDefaultStrategy()) {
+  const urlParams = strategy.parse();
+  const declared = new Set(Object.keys(params));
+  const unrecognized = Object.keys(urlParams).filter((k) => !declared.has(k));
+  const malformed = [];
+  const stale = [];
+  for (const key of declared) {
+    const raw = urlParams[key]?.[0];
+    const c = classifyParam(params[key], raw);
+    if (c.state === "malformed") malformed.push({ key, raw: c.raw, canonical: c.canonical });
+    else if (c.state === "stale") stale.push({ key, raw: c.raw, canonical: c.canonical });
+  }
+  return { unrecognized, malformed, stale };
+}
+function cleanUrl(params, policy = {}, strategy = getDefaultStrategy()) {
+  const diag = inspectUrl(params, strategy);
+  const {
+    unrecognized = "keep",
+    malformed = "keep",
+    stale = "keep"
+  } = policy;
+  const willStripUnrecognized = unrecognized === "strip" && diag.unrecognized.length > 0;
+  const willResetMalformed = malformed === "reset" && diag.malformed.length > 0;
+  const willNormalizeStale = stale === "normalize" && diag.stale.length > 0;
+  if (!willStripUnrecognized && !willResetMalformed && !willNormalizeStale) return diag;
+  if (typeof window === "undefined") return diag;
+  const next = { ...strategy.parse() };
+  if (willStripUnrecognized) {
+    for (const k of diag.unrecognized) delete next[k];
+  }
+  const applyKeyed = (entries) => {
+    for (const { key, canonical } of entries) {
+      if (canonical === void 0) delete next[key];
+      else next[key] = [canonical];
+    }
+  };
+  if (willResetMalformed) applyKeyed(diag.malformed);
+  if (willNormalizeStale) applyKeyed(diag.stale);
+  const url = new URL(window.location.href);
+  const updated = strategy.buildUrl(url, next);
+  window.history.replaceState({ ...window.history.state }, "", updated);
+  window.dispatchEvent(new PopStateEvent("popstate"));
+  return diag;
+}
+
+// src/useUrlState.ts
 function debounce(fn, ms) {
   let timeoutId = null;
   const debounced = ((...args) => {
@@ -345,7 +402,7 @@ function multiToSingle(multi) {
 }
 function useUrlState(key, param, options = {}) {
   const opts = typeof options === "boolean" ? { push: options } : options;
-  const { debounce: debounceMs = 0, push = false } = opts;
+  const { debounce: debounceMs = 0, push = false, onDiagnostic } = opts;
   const strategy = getDefaultStrategy();
   const paramRef = react.useRef(param);
   paramRef.current = param;
@@ -430,11 +487,20 @@ function useUrlState(key, param, options = {}) {
     },
     [writeToUrl, strategy, forceUpdate]
   );
-  return [value, setValue];
+  const diagnostic = classifyParam(param, encoded);
+  const lastDiagSigRef = react.useRef(null);
+  react.useEffect(() => {
+    if (!onDiagnostic) return;
+    const sig = JSON.stringify(diagnostic);
+    if (sig === lastDiagSigRef.current) return;
+    lastDiagSigRef.current = sig;
+    onDiagnostic(diagnostic);
+  });
+  return [value, setValue, diagnostic];
 }
 function useUrlStates(params, options = {}) {
   const opts = typeof options === "boolean" ? { push: options } : options;
-  const { debounce: debounceMs = 0, push = false } = opts;
+  const { debounce: debounceMs = 0, push = false, onDiagnostics, cleanOnMount } = opts;
   const strategy = getDefaultStrategy();
   const [, forceUpdate] = react.useReducer((c) => c + 1, 0);
   const lastWrittenRef = react.useRef({});
@@ -547,7 +613,19 @@ function useUrlStates(params, options = {}) {
     },
     [params, writeToUrl, strategy, forceUpdate]
   );
-  return { values, setValues };
+  const diagnostics = inspectUrl(params, strategy);
+  const lastDiagSigRef = react.useRef(null);
+  react.useEffect(() => {
+    if (!onDiagnostics) return;
+    const sig = JSON.stringify(diagnostics);
+    if (sig === lastDiagSigRef.current) return;
+    lastDiagSigRef.current = sig;
+    onDiagnostics(diagnostics);
+  });
+  react.useEffect(() => {
+    if (cleanOnMount) cleanUrl(params, cleanOnMount, strategy);
+  }, []);
+  return { values, setValues, diagnostics };
 }
 function useMultiUrlState(key, param, options = {}) {
   const opts = typeof options === "boolean" ? { push: options } : options;
@@ -876,6 +954,88 @@ function floatToBytes(value) {
 function bytesToFloat(bytes) {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   return view.getFloat64(0, false);
+}
+
+// src/numberTuple.ts
+function formatSignedParts(parts, delimiter, signDelim) {
+  if (!signDelim) return parts.join(delimiter);
+  let result = parts[0];
+  for (let i = 1; i < parts.length; i++) {
+    if (!parts[i].startsWith("-")) result += " ";
+    result += parts[i];
+  }
+  return result;
+}
+function parseSignedParts(s, delimiter, signDelim) {
+  if (signDelim) return s.match(/-?\d+\.?\d*/g) ?? [];
+  return s.split(delimiter);
+}
+function formatNumber(n, enc) {
+  if (enc.int) return Math.trunc(n).toString();
+  if (enc.decimals !== void 0) return n.toFixed(enc.decimals);
+  if (enc.sigfigs !== void 0) return formatSigfigs(n, enc.sigfigs);
+  throw new Error("numberTupleParam: field has no encoding (decimals/sigfigs/int)");
+}
+function formatSigfigs(n, sigfigs) {
+  if (n === 0) return sigfigs > 1 ? 0 .toFixed(sigfigs - 1) : "0";
+  const magnitude = Math.floor(Math.log10(Math.abs(n)));
+  const decimals = sigfigs - 1 - magnitude;
+  if (decimals >= 0) return n.toFixed(decimals);
+  const factor = Math.pow(10, -decimals);
+  return (Math.round(n / factor) * factor).toString();
+}
+function getPath(obj, path) {
+  return path.split(".").reduce((o, k) => o == null ? void 0 : o[k], obj);
+}
+function setPath(obj, path, val) {
+  const parts = path.split(".");
+  const out = { ...obj };
+  let cur = out;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const k = parts[i];
+    cur[k] = { ...cur[k] };
+    cur = cur[k];
+  }
+  cur[parts[parts.length - 1]] = val;
+  return out;
+}
+function numberTupleParam(opts) {
+  const {
+    default: def,
+    fields,
+    delimiter = "_",
+    signDelim = true,
+    omitDefault = true
+  } = opts;
+  function format(v) {
+    const parts = fields.map((f) => {
+      const raw = getPath(v, f.path);
+      const n = typeof raw === "number" ? raw : 0;
+      return formatNumber(n, f);
+    });
+    return formatSignedParts(parts, delimiter, signDelim);
+  }
+  const defaultEncoded = format(def);
+  return {
+    encode(v) {
+      const enc = format(v);
+      if (omitDefault && enc === defaultEncoded) return void 0;
+      return enc;
+    },
+    decode(s) {
+      if (s === void 0 || s === "") return def;
+      const parts = parseSignedParts(s, delimiter, signDelim);
+      let result = def;
+      for (let i = 0; i < fields.length; i++) {
+        const raw = parts[i];
+        if (raw === void 0) continue;
+        const n = parseFloat(raw);
+        if (isNaN(n)) continue;
+        result = setPath(result, fields[i].path, n);
+      }
+      return result;
+    }
+  };
 }
 
 // src/float.ts
@@ -1402,8 +1562,29 @@ function pointParam(opts = {}) {
     default: defaultPoint = null,
     alphabet
   } = opts;
+  if (encoding === "string") {
+    const synthetic = defaultPoint ?? { x: 0, y: 0 };
+    const inner = numberTupleParam({
+      default: synthetic,
+      fields: [
+        { path: "x", decimals },
+        { path: "y", decimals }
+      ],
+      signDelim: true,
+      omitDefault: defaultPoint !== null
+    });
+    return {
+      encode: (point) => point === null ? void 0 : inner.encode(point),
+      decode: (encoded) => {
+        if (encoded === void 0 || encoded === "") return defaultPoint;
+        const parts = parseSignedParts(encoded, "_", true);
+        if (parts.length < 2) return defaultPoint;
+        if (isNaN(parseFloat(parts[0])) || isNaN(parseFloat(parts[1]))) return defaultPoint;
+        return inner.decode(encoded);
+      }
+    };
+  }
   const scheme = resolvePrecision(precision);
-  const multiplier = Math.pow(10, decimals);
   const base64Opts = alphabet ? { alphabet } : void 0;
   return {
     encode: (point) => {
@@ -1411,42 +1592,16 @@ function pointParam(opts = {}) {
       if (defaultPoint && point.x === defaultPoint.x && point.y === defaultPoint.y) {
         return void 0;
       }
-      if (encoding === "string") {
-        const xTrunc = Math.round(point.x * multiplier) / multiplier;
-        const yTrunc = Math.round(point.y * multiplier) / multiplier;
-        const xStr = xTrunc.toFixed(decimals);
-        const yStr = yTrunc.toFixed(decimals);
-        const delimiter = yTrunc >= 0 ? " " : "";
-        return `${xStr}${delimiter}${yStr}`;
-      } else {
-        const buf = new BitBuffer();
-        buf.encodeFixedPoints([point.x, point.y], scheme);
-        return buf.toBase64(base64Opts);
-      }
+      const buf = new BitBuffer();
+      buf.encodeFixedPoints([point.x, point.y], scheme);
+      return buf.toBase64(base64Opts);
     },
     decode: (encoded) => {
       if (encoded === void 0 || encoded === "") return defaultPoint;
       try {
-        if (encoding === "string") {
-          let x, y;
-          if (encoded.includes(" ")) {
-            const parts = encoded.split(" ");
-            if (parts.length !== 2) return defaultPoint;
-            x = parseFloat(parts[0]);
-            y = parseFloat(parts[1]);
-          } else {
-            const minusIdx = encoded.indexOf("-", encoded[0] === "-" ? 1 : 0);
-            if (minusIdx === -1) return defaultPoint;
-            x = parseFloat(encoded.slice(0, minusIdx));
-            y = parseFloat(encoded.slice(minusIdx));
-          }
-          if (isNaN(x) || isNaN(y)) return defaultPoint;
-          return { x, y };
-        } else {
-          const buf = BitBuffer.fromBase64(encoded, base64Opts);
-          const [x, y] = buf.decodeFixedPoints(2, scheme);
-          return { x, y };
-        }
+        const buf = BitBuffer.fromBase64(encoded, base64Opts);
+        const [x, y] = buf.decodeFixedPoints(2, scheme);
+        return { x, y };
       } catch {
         return defaultPoint;
       }
@@ -1485,22 +1640,6 @@ function encodePointAllModes(point, opts = {}) {
     bits: buf.end
   };
 }
-function formatSignedParts(parts, delimiter, signedDelim) {
-  if (!signedDelim) return parts.join(delimiter);
-  let result = parts[0];
-  for (let i = 1; i < parts.length; i++) {
-    if (!parts[i].startsWith("-")) result += " ";
-    result += parts[i];
-  }
-  return result;
-}
-function parseSignedParts(s, delimiter, signedDelim) {
-  if (signedDelim) {
-    const matches = s.match(/-?\d+\.?\d*/g);
-    return matches && matches.length > 0 ? matches : null;
-  }
-  return s.split(delimiter);
-}
 function llzParam(opts) {
   const {
     default: def,
@@ -1509,48 +1648,22 @@ function llzParam(opts) {
     pitchDecimals = 0,
     bearingDecimals = 0,
     delimiter = "_",
-    signedDelim = false
+    signDelim = true
   } = opts;
   const hasPB = def.pitch !== void 0 || def.bearing !== void 0;
-  function format(v) {
-    const parts = [
-      v.lat.toFixed(latLngDecimals),
-      v.lng.toFixed(latLngDecimals),
-      v.zoom.toFixed(zoomDecimals)
-    ];
-    if (hasPB) {
-      parts.push(
-        (v.pitch ?? 0).toFixed(pitchDecimals),
-        (v.bearing ?? 0).toFixed(bearingDecimals)
-      );
-    }
-    return formatSignedParts(parts, delimiter, signedDelim);
+  const fields = [
+    { path: "lat", decimals: latLngDecimals },
+    { path: "lng", decimals: latLngDecimals },
+    { path: "zoom", decimals: zoomDecimals }
+  ];
+  if (hasPB) {
+    fields.push(
+      { path: "pitch", decimals: pitchDecimals },
+      { path: "bearing", decimals: bearingDecimals }
+    );
   }
-  const defaultEncoded = format(def);
-  return {
-    encode(v) {
-      const encoded = format(v);
-      if (encoded === defaultEncoded) return void 0;
-      return encoded;
-    },
-    decode(s) {
-      if (s === void 0 || s === "") return def;
-      const parts = parseSignedParts(s, delimiter, signedDelim);
-      if (!parts) return def;
-      const lat = parseFloat(parts[0]);
-      const lng = parseFloat(parts[1]);
-      const zoom = parseFloat(parts[2]);
-      if (isNaN(lat) || isNaN(lng) || isNaN(zoom)) return def;
-      const result = { lat, lng, zoom };
-      if (hasPB) {
-        const pitch = parts[3] !== void 0 ? parseFloat(parts[3]) : NaN;
-        const bearing = parts[4] !== void 0 ? parseFloat(parts[4]) : NaN;
-        result.pitch = isNaN(pitch) ? def.pitch ?? 0 : pitch;
-        result.bearing = isNaN(bearing) ? def.bearing ?? 0 : bearing;
-      }
-      return result;
-    }
-  };
+  const fullDef = hasPB ? { ...def, pitch: def.pitch ?? 0, bearing: def.bearing ?? 0 } : def;
+  return numberTupleParam({ default: fullDef, fields, delimiter, signDelim });
 }
 function viewStateParam(opts) {
   const {
@@ -1560,45 +1673,42 @@ function viewStateParam(opts) {
     pitchDecimals = 0,
     bearingDecimals = 0,
     delimiter = "_",
-    signedDelim = false,
+    signDelim = true,
     pitchFallback = 0,
     bearingFallback = 0
   } = opts;
-  function format(v) {
-    const parts = [
-      v.latitude.toFixed(latLngDecimals),
-      v.longitude.toFixed(latLngDecimals),
-      v.zoom.toFixed(zoomDecimals),
-      v.pitch.toFixed(pitchDecimals),
-      v.bearing.toFixed(bearingDecimals)
-    ];
-    return formatSignedParts(parts, delimiter, signedDelim);
-  }
-  const defaultEncoded = def === null ? null : format(def);
+  const synthetic = def ?? {
+    latitude: 0,
+    longitude: 0,
+    zoom: 0,
+    pitch: pitchFallback,
+    bearing: bearingFallback
+  };
+  const inner = numberTupleParam({
+    default: synthetic,
+    fields: [
+      { path: "latitude", decimals: latLngDecimals },
+      { path: "longitude", decimals: latLngDecimals },
+      { path: "zoom", decimals: zoomDecimals },
+      { path: "pitch", decimals: pitchDecimals },
+      { path: "bearing", decimals: bearingDecimals }
+    ],
+    delimiter,
+    signDelim,
+    omitDefault: def !== null
+  });
   return {
     encode(v) {
       if (v === null) return void 0;
-      const encoded = format(v);
-      if (encoded === defaultEncoded) return void 0;
-      return encoded;
+      return inner.encode(v);
     },
     decode(s) {
       if (s === void 0 || s === "") return def;
-      const parts = parseSignedParts(s, delimiter, signedDelim);
-      if (!parts || parts.length < 3) return def;
-      const latitude = parseFloat(parts[0]);
-      const longitude = parseFloat(parts[1]);
-      const zoom = parseFloat(parts[2]);
-      if (isNaN(latitude) || isNaN(longitude) || isNaN(zoom)) return def;
-      const pitchRaw = parts[3] !== void 0 ? parseFloat(parts[3]) : NaN;
-      const bearingRaw = parts[4] !== void 0 ? parseFloat(parts[4]) : NaN;
-      return {
-        latitude,
-        longitude,
-        zoom,
-        pitch: isNaN(pitchRaw) ? def?.pitch ?? pitchFallback : pitchRaw,
-        bearing: isNaN(bearingRaw) ? def?.bearing ?? bearingFallback : bearingRaw
-      };
+      const parts = signDelim ? s.match(/-?\d+\.?\d*/g) ?? [] : s.split(delimiter);
+      if (parts.length < 3) return def;
+      const head = [parseFloat(parts[0]), parseFloat(parts[1]), parseFloat(parts[2])];
+      if (head.some(isNaN)) return def;
+      return inner.decode(s);
     }
   };
 }
@@ -1607,36 +1717,19 @@ function bboxParam(opts) {
     default: def,
     latLngDecimals = 4,
     delimiter = "_",
-    signedDelim = false
+    signDelim = true
   } = opts;
-  function format(v) {
-    const parts = [
-      v.sw.lat.toFixed(latLngDecimals),
-      v.sw.lng.toFixed(latLngDecimals),
-      v.ne.lat.toFixed(latLngDecimals),
-      v.ne.lng.toFixed(latLngDecimals)
-    ];
-    return formatSignedParts(parts, delimiter, signedDelim);
-  }
-  const defaultEncoded = format(def);
-  return {
-    encode(v) {
-      const encoded = format(v);
-      if (encoded === defaultEncoded) return void 0;
-      return encoded;
-    },
-    decode(s) {
-      if (s === void 0 || s === "") return def;
-      const parts = parseSignedParts(s, delimiter, signedDelim);
-      if (!parts || parts.length < 4) return def;
-      const swLat = parseFloat(parts[0]);
-      const swLng = parseFloat(parts[1]);
-      const neLat = parseFloat(parts[2]);
-      const neLng = parseFloat(parts[3]);
-      if ([swLat, swLng, neLat, neLng].some(isNaN)) return def;
-      return { sw: { lat: swLat, lng: swLng }, ne: { lat: neLat, lng: neLng } };
-    }
-  };
+  return numberTupleParam({
+    default: def,
+    fields: [
+      { path: "sw.lat", decimals: latLngDecimals },
+      { path: "sw.lng", decimals: latLngDecimals },
+      { path: "ne.lat", decimals: latLngDecimals },
+      { path: "ne.lng", decimals: latLngDecimals }
+    ],
+    delimiter,
+    signDelim
+  });
 }
 
 // src/index.ts
@@ -1698,6 +1791,8 @@ exports.bboxParam = bboxParam;
 exports.binaryParam = binaryParam;
 exports.boolParam = boolParam;
 exports.bytesToFloat = bytesToFloat;
+exports.classifyParam = classifyParam;
+exports.cleanUrl = cleanUrl;
 exports.clearParams = clearParams;
 exports.codeParam = codeParam;
 exports.codesParam = codesParam;
@@ -1708,11 +1803,13 @@ exports.encodePointAllModes = encodePointAllModes;
 exports.enumParam = enumParam;
 exports.floatParam = floatParam;
 exports.floatToBytes = floatToBytes;
+exports.formatSignedParts = formatSignedParts;
 exports.fromFixedPoint = fromFixedPoint;
 exports.fromFloat = fromFloat;
 exports.getCurrentParams = getCurrentParams;
 exports.getDefaultStrategy = getDefaultStrategy;
 exports.hashStrategy = hashStrategy;
+exports.inspectUrl = inspectUrl;
 exports.intParam = intParam;
 exports.llzParam = llzParam;
 exports.multiFloatParam = multiFloatParam;
@@ -1720,11 +1817,13 @@ exports.multiIntParam = multiIntParam;
 exports.multiStringParam = multiStringParam;
 exports.notifyLocationChange = notifyLocationChange;
 exports.numberArrayParam = numberArrayParam;
+exports.numberTupleParam = numberTupleParam;
 exports.optFloatParam = optFloatParam;
 exports.optIntParam = optIntParam;
 exports.paginationParam = paginationParam;
 exports.parseMultiParams = parseMultiParams;
 exports.parseParams = parseParams;
+exports.parseSignedParts = parseSignedParts;
 exports.pointParam = pointParam;
 exports.precisionSchemes = precisionSchemes;
 exports.queryStrategy = queryStrategy;
