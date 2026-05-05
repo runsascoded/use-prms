@@ -174,6 +174,15 @@ describe('cleanUrl', () => {
 })
 
 describe('useUrlState 3-tuple', () => {
+  it('legacy 2-element destructuring still works (no warnings, correct types at runtime)', () => {
+    window.history.replaceState({}, '', '/?n=42')
+    const { result } = renderHook(() => useUrlState('n', intParam(0)))
+    // This is the existing API shape; the 3rd slot is additive.
+    const [value, setValue] = result.current
+    expect(value).toBe(42)
+    expect(typeof setValue).toBe('function')
+  })
+
   it('returns diagnostic as 3rd tuple element', () => {
     window.history.replaceState({}, '', '/?n=5')
     const { result } = renderHook(() => useUrlState('n', intParam(0)))

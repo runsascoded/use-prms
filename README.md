@@ -15,6 +15,8 @@ Type-safe URL-parameter (query and hash) management with minimal, human-readable
 - [Batch Updates](#batch)
 - [URL Encoding](#encoding)
 - [Binary Encoding](#binary)
+- [Map / Tuple Params](#tuple)
+- [URL Diagnostics](#diagnostics)
 - [Framework-Agnostic Core](#core)
 - [Hash Params](#hash)
 - [API Reference](#api)
@@ -293,6 +295,145 @@ const param = floatParam({ default: 0, alphabet: 'sortable' })
 
 The `sortable` alphabet is useful when encoded strings need to sort in the same order as their numeric values (e.g., for database indexing).
 
+## Map / Tuple Params <a id="tuple"></a>
+
+For URL params that pack multiple numbers into a single value (lat/lng/zoom, bounding boxes, camera state, …), use `numberTupleParam` or one of the named wrappers built on top of it.
+
+### `numberTupleParam`
+
+A general-purpose primitive: declares a heterogeneous tuple of numbers (each with its own encoding — `decimals`, `sigfigs`, or `int`) at typed paths within a shape `T`. The path type `NumberPath<T>` is recursive, so dotted paths like `'sw.lat'` autocomplete and reject non-number leaves.
+
+```typescript
+import { numberTupleParam } from 'use-prms'
+
+type Camera = { lat: number; lng: number; zoom: number; pitch: number }
+
+const cam = numberTupleParam<Camera>({
+  default: { lat: 0, lng: 0, zoom: 0, pitch: 0 },
+  fields: [
+    { path: 'lat',   decimals: 4 },
+    { path: 'lng',   decimals: 4 },
+    { path: 'zoom',  decimals: 2 },
+    { path: 'pitch', int: true },
+  ],
+})
+// ?cam=40.7400-74.0120+11.80+45  (signDelim default; ` ` URL-encodes to `+`)
+```
+
+`fields[i]` accepts exactly one of `decimals`, `sigfigs`, or `int`. Nested shapes work via dotted paths:
+
+```typescript
+type BBox = { sw: { lat: number; lng: number }; ne: { lat: number; lng: number } }
+
+const bb = numberTupleParam<BBox>({
+  default: { sw: { lat: 0, lng: 0 }, ne: { lat: 0, lng: 0 } },
+  fields: [
+    { path: 'sw.lat', decimals: 4 },
+    { path: 'sw.lng', decimals: 4 },
+    { path: 'ne.lat', decimals: 4 },
+    { path: 'ne.lng', decimals: 4 },
+  ],
+})
+```
+
+### `signDelim` and auto-migration
+
+By default, `numberTupleParam` (and the named wrappers below) use a "sign-as-delimiter" encoding: a space (URL-encodes to `+`) between non-negative numbers, no delimiter before negative numbers (the `-` itself separates). This reads naturally for signed coordinates.
+
+```
+{ lat: 40.74, lng: -74.01, zoom: 11.8 }
+→  '40.7400-74.0100 11.80'   (literal: `40.7400-74.0100+11.80` in URL)
+```
+
+The decoder splits on any non-numeric char (`[ +\-_,]` etc.), so URLs in older delimited formats (e.g. `40.7400_-74.0100_11.80`) parse correctly. On the next state change, encode emits the new format — auto-migrating bookmarks in place. Pass `signDelim: false` to opt out and use a strict `delimiter` (default `'_'`).
+
+### Named wrappers
+
+Three thin shells over `numberTupleParam` for the common map-state cases:
+
+```typescript
+import { llzParam, bboxParam, viewStateParam } from 'use-prms'
+
+// Lat/lng/zoom (+ optional pitch/bearing)
+const view = llzParam({
+  default: { lat: 40.74, lng: -74.012, zoom: 11.8 },
+  // latLngDecimals, zoomDecimals, pitchDecimals, bearingDecimals are individually configurable
+})
+// ?ll=40.7400-74.0120+11.80
+
+// Bounding box (sw/ne corners)
+const bb = bboxParam({
+  default: { sw: { lat: 40.7, lng: -74.1 }, ne: { lat: 40.8, lng: -74.0 } },
+})
+
+// deck.gl-style ViewState; supports `default: null` for "no override / use auto-fit"
+const vs = viewStateParam({ default: null, pitchFallback: 45 })
+```
+
+All three accept `signDelim`, `delimiter`, and per-field decimal options.
+
+## URL Diagnostics <a id="diagnostics"></a>
+
+`use-prms` can report on the relationship between the URL and your declared param spec — which keys are unrecognized, which values are malformed (decoded to default), and which are stale (parsed but in non-canonical format). Reporting and cleanup are decoupled: you can observe without acting, act without observing, or both.
+
+### Pure helpers (framework-agnostic)
+
+```typescript
+import { classifyParam, inspectUrl, cleanUrl, intParam, llzParam } from 'use-prms'
+
+// Classify a single value
+classifyParam(intParam(0), '5')        // { state: 'canonical', raw: '5' }
+classifyParam(intParam(0), 'garbage')  // { state: 'malformed', raw: 'garbage', canonical: undefined }
+
+const ll = llzParam({ default: { lat: 0, lng: 0, zoom: 0 } })
+classifyParam(ll, '40.76_-73.98_13.00')
+//   → { state: 'stale', raw: '40.76_-73.98_13.00', canonical: '40.7600-73.9800 13.00' }
+
+// Inspect the full URL — pure, no side effects
+inspectUrl({ ll, n: intParam(0) })
+//   → { unrecognized: ['legacy'], malformed: [{ key: 'n', raw: 'garbage', ... }], stale: [...] }
+
+// Apply a cleanup policy in place (history.replaceState)
+cleanUrl({ ll, n: intParam(0) }, {
+  unrecognized: 'strip',     // default 'keep'
+  malformed:    'reset',     // default 'keep'
+  stale:        'normalize', // default 'keep'
+})
+```
+
+`cleanUrl` returns the diagnostics it observed, so you can log/notify based on what was acted on.
+
+### React integration
+
+`useUrlState` returns a 3-tuple now (the 3rd element is additive — existing 2-element destructuring still works):
+
+```typescript
+const [view, setView, diag] = useUrlState('ll', llzParam({ default: ... }))
+// diag: { state: 'absent' | 'canonical' | 'stale' | 'malformed', raw?, canonical? }
+
+// Or fire-and-forget via callback:
+useUrlState('ll', llz, {
+  onDiagnostic: (d) => { if (d.state === 'malformed') toast.warn('bad URL') },
+})
+```
+
+`useUrlStates` adds a `diagnostics` field plus two new options:
+
+```typescript
+const { values, setValues, diagnostics } = useUrlStates(
+  { ll: llzParam(...), bb: bboxParam(...) },
+  {
+    // Fire whenever the URL changes
+    onDiagnostics: (d) => console.log(d),
+
+    // Auto-clean once on mount (orthogonal to onDiagnostics)
+    cleanOnMount: { unrecognized: 'strip', stale: 'normalize' },
+  },
+)
+```
+
+The malformed/stale split is heuristic: a URL that legitimately encodes the *default* value in a legacy format gets reported as `malformed` (a benign false-positive — `cleanUrl` produces the correct outcome either way, since the value is the default).
+
 ## Framework-Agnostic Core <a id="core"></a>
 
 Use the core utilities without React:
@@ -334,15 +475,19 @@ React hook for managing a single URL parameter.
 - `options`: `UseUrlStateOptions | boolean` (boolean is legacy shorthand for `push`)
   - `push?`: Use pushState (true) or replaceState (false, default)
   - `debounce?`: Debounce URL writes in ms (state updates immediately)
-- Returns: `[value: T, setValue: (value: T) => void]`
+  - `onDiagnostic?`: Callback fired with a `ParamDiagnostic` whenever the URL value changes shape (state + raw)
+- Returns: `[value: T, setValue: (value: T) => void, diagnostic: ParamDiagnostic]`
 
 ### `useUrlStates<P>(params, options?)`
 
 React hook for managing multiple URL parameters together.
 
 - `params`: Object mapping keys to Param types
-- `options`: Same as `useUrlState`
-- Returns: `{ values, setValues }`
+- `options`: `UseUrlStatesOptions | boolean`
+  - All `useUrlState` options except `onDiagnostic`
+  - `onDiagnostics?`: Callback fired with a `UrlDiagnostics` whenever the URL changes shape
+  - `cleanOnMount?`: `CleanUrlPolicy` — runs `cleanUrl(params, policy)` once on mount
+- Returns: `{ values, setValues, diagnostics: UrlDiagnostics }`
 
 ### `useMultiUrlState<T>(key, param, options?)`
 
@@ -400,6 +545,10 @@ type MultiParam<T> = {
 | `codeParam(init, codeMap)` | `Param<T>` | Enum with short URL codes |
 | `codesParam(allValues, codeMap, sep?)` | `Param<T[]>` | Multi-value with short codes |
 | `paginationParam(defaultSize, validSizes?)` | `Param<Pagination>` | Offset + page size |
+| `numberTupleParam<T>(opts)` | `Param<T>` | Heterogeneous number tuple (typed dotted paths, decimals/sigfigs/int per field, signDelim) |
+| `llzParam(opts)` | `Param<LLZ>` | Lat/lng/zoom (+ optional pitch/bearing) |
+| `bboxParam(opts)` | `Param<BBox>` | Bounding box (`sw`/`ne` corners) |
+| `viewStateParam(opts)` | `Param<ViewState \| null>` | deck.gl camera state; nullable default for "no override" |
 
 ### Built-in MultiParam Types
 
@@ -433,6 +582,17 @@ type MultiParam<T> = {
 - `updateUrl(params, push?)`: Update URL without reloading (browser only)
 - `clearParams(strategy?)`: Clear all URL params (`'query'` or `'hash'`)
 - `notifyLocationChange()`: Manually notify hooks of a URL change (for edge cases like direct `location` assignment)
+
+### Diagnostics
+
+| Export | Description |
+|--------|-------------|
+| `classifyParam(param, raw)` | Classify a single raw URL value: `'absent' \| 'canonical' \| 'stale' \| 'malformed'` |
+| `inspectUrl(params, strategy?)` | Pure: returns `UrlDiagnostics` for the current URL given a param spec |
+| `cleanUrl(params, policy?, strategy?)` | Mutates URL per `CleanUrlPolicy` (defaults are all `'keep'`); returns observed diagnostics |
+| `ParamDiagnostic` | Per-key state tagged union |
+| `UrlDiagnostics` | `{ unrecognized: string[], malformed: KeyedDiagnostic[], stale: KeyedDiagnostic[] }` |
+| `CleanUrlPolicy` | `{ unrecognized?, malformed?, stale?: 'keep' \| 'strip' \| 'reset' \| 'normalize' }` |
 
 ## Examples <a id="examples"></a>
 

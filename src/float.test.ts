@@ -689,6 +689,15 @@ describe('bboxParam', () => {
     expect(p.decode('garbage')).toEqual(def)
   })
 
+  it('decodes legacy underscore-delim URL under default signDelim (auto-migration)', () => {
+    const p = bboxParam({ default: def })
+    const decoded = p.decode('40.7055_-74.0682_40.8500_-73.9000')
+    expect(decoded.sw.lat).toBeCloseTo(40.7055, 4)
+    expect(decoded.sw.lng).toBeCloseTo(-74.0682, 4)
+    expect(decoded.ne.lat).toBeCloseTo(40.8500, 4)
+    expect(decoded.ne.lng).toBeCloseTo(-73.9000, 4)
+  })
+
   it('fills defaults for missing fields (per-field fallback)', () => {
     const p = bboxParam({ default: def, signDelim: true })
     // sw.lat/sw.lng come from input; ne.lat/ne.lng fall back to default.
@@ -769,6 +778,16 @@ describe('viewStateParam', () => {
 
     it('roundtrips', () => {
       expect(p.decode(p.encode(view)!)).toEqual(view)
+    })
+
+    it('decodes legacy underscore-delim URL (auto-migration)', () => {
+      const decoded = p.decode('40.7055_-74.0682_11.98_27_8')
+      expect(decoded).not.toBeNull()
+      expect(decoded!.latitude).toBeCloseTo(40.7055, 4)
+      expect(decoded!.longitude).toBeCloseTo(-74.0682, 4)
+      expect(decoded!.zoom).toBeCloseTo(11.98, 2)
+      expect(decoded!.pitch).toBe(27)
+      expect(decoded!.bearing).toBe(8)
     })
   })
 
