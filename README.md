@@ -434,6 +434,36 @@ const { values, setValues, diagnostics } = useUrlStates(
 
 The malformed/stale split is heuristic: a URL that legitimately encodes the *default* value in a legacy format gets reported as `malformed` (a benign false-positive — `cleanUrl` produces the correct outcome either way, since the value is the default).
 
+### Deprecating a param
+
+`unrecognized: 'strip'` is too coarse when your app shares its URL with third-party tooling (analytics, A/B-test frameworks, share-link augmenters): it would clobber everything your app doesn't declare. For "we used to read this key, we don't anymore, please strip just this one", use `deprecated`:
+
+```typescript
+import { cleanUrl, llzParam } from 'use-prms'
+
+const llz = llzParam({ default: { lat: 40.74, lng: -74.012, zoom: 11.8 } })
+
+useEffect(() => {
+  // Simple form: drop these keys (default: console.warn each one)
+  cleanUrl({ llz }, { deprecated: ['v'] })
+
+  // Migration form: rewrite old → new typed value, then drop the old key
+  cleanUrl({ llz }, {
+    deprecated: {
+      v: (raw) => {
+        const [lat, lng, zoom] = raw.split('_').map(Number)
+        return { llz: { lat, lng, zoom } }
+      },
+      u: null,  // null = just drop (same as the array form)
+    },
+    onDeprecated: (info) => analytics.track('legacy_url_param', info),
+    // onDeprecated: null  to silence the default warn
+  })
+}, [])
+```
+
+Surgical (only the named keys are touched, third-party params survive), independent of `unrecognized`, and both the strip and the migration land in one `replaceState`. `inspectUrl` mirrors this: `inspectUrl(params, { deprecated: [...] })` returns a `deprecated: string[]` field reporting which listed keys are actually in the URL.
+
 ## Framework-Agnostic Core <a id="core"></a>
 
 Use the core utilities without React:
@@ -588,11 +618,13 @@ type MultiParam<T> = {
 | Export | Description |
 |--------|-------------|
 | `classifyParam(param, raw)` | Classify a single raw URL value: `'absent' \| 'canonical' \| 'stale' \| 'malformed'` |
-| `inspectUrl(params, strategy?)` | Pure: returns `UrlDiagnostics` for the current URL given a param spec |
+| `inspectUrl(params, opts?, strategy?)` | Pure: returns `UrlDiagnostics` for the current URL. `opts.deprecated?: DeprecatedSpec` to detect old keys. |
 | `cleanUrl(params, policy?, strategy?)` | Mutates URL per `CleanUrlPolicy` (defaults are all `'keep'`); returns observed diagnostics |
 | `ParamDiagnostic` | Per-key state tagged union |
-| `UrlDiagnostics` | `{ unrecognized: string[], malformed: KeyedDiagnostic[], stale: KeyedDiagnostic[] }` |
-| `CleanUrlPolicy` | `{ unrecognized?, malformed?, stale?: 'keep' \| 'strip' \| 'reset' \| 'normalize' }` |
+| `UrlDiagnostics` | `{ unrecognized, deprecated: string[], malformed: KeyedDiagnostic[], stale: KeyedDiagnostic[] }` |
+| `CleanUrlPolicy` | `{ unrecognized?, malformed?, stale?, deprecated?: DeprecatedSpec, onDeprecated?: (info) => void \| null }` |
+| `DeprecatedSpec` | `readonly string[] \| Record<string, null \| (raw: string) => Record<string, unknown>>` |
+| `DeprecatedInfo` | `{ key: string, raw: string, migrated?: Record<string, unknown> }` |
 
 ## Examples <a id="examples"></a>
 

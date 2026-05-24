@@ -513,7 +513,7 @@ export function useUrlStates<P extends Record<string, Param<any>>>(
   )
 
   // Compute diagnostics for the current URL — recomputed each render.
-  const diagnostics = inspectUrl(params, strategy)
+  const diagnostics = inspectUrl(params, { deprecated: cleanOnMount?.deprecated }, strategy)
 
   // Fire onDiagnostics callback when shape changes.
   const lastDiagSigRef = useRef<string | null>(null)

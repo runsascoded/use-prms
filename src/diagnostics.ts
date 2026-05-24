@@ -36,12 +36,63 @@ export interface KeyedDiagnostic {
  * Structured report on the URL's relationship to a declared param spec.
  */
 export interface UrlDiagnostics {
-  /** Keys present in the URL but not declared in `params`. */
+  /** Keys present in the URL but not declared (and not declared-deprecated). */
   unrecognized: string[]
+  /** Subset of declared-deprecated keys present in the URL. */
+  deprecated: string[]
   /** Declared keys whose URL value is garbage. */
   malformed: KeyedDiagnostic[]
   /** Declared keys whose URL value parses but is non-canonical. */
   stale: KeyedDiagnostic[]
+}
+
+/**
+ * Function form of a deprecated entry: receives the old raw URL value,
+ * returns a record from declared param keys to the new typed values.
+ * `cleanUrl` encodes each via `params[k].encode(v)`.
+ */
+export type DeprecatedMigration = (raw: string) => Record<string, unknown>
+
+/**
+ * Declaration of which URL keys are deprecated:
+ * - `string[]`: drop these keys.
+ * - `Record<string, null | DeprecatedMigration>`: `null` drops; a function
+ *   migrates the old value to new typed param values, then drops the old key.
+ */
+export type DeprecatedSpec =
+  | readonly string[]
+  | Record<string, null | DeprecatedMigration>
+
+/** Info fired to `onDeprecated` for each deprecated key found in the URL. */
+export interface DeprecatedInfo {
+  key: string
+  raw: string
+  /** Present only if a migration function ran for this key. */
+  migrated?: Record<string, unknown>
+}
+
+function deprecatedKeysOf(spec: DeprecatedSpec | undefined): string[] {
+  if (!spec) return []
+  return Array.isArray(spec) ? [...spec] : Object.keys(spec)
+}
+
+function migrationFor(spec: DeprecatedSpec | undefined, key: string): DeprecatedMigration | null {
+  if (!spec || Array.isArray(spec)) return null
+  const v = (spec as Record<string, null | DeprecatedMigration>)[key]
+  return typeof v === 'function' ? v : null
+}
+
+const defaultOnDeprecated = ({ key, raw, migrated }: DeprecatedInfo) => {
+  if (migrated) {
+    console.warn(`[use-prms] migrated deprecated URL param "${key}"=${raw} →`, migrated)
+  } else {
+    console.warn(`[use-prms] stripping deprecated URL param "${key}"=${raw}`)
+  }
+}
+
+/** Options accepted by `inspectUrl` (currently just the deprecated spec). */
+export interface InspectUrlOptions {
+  deprecated?: DeprecatedSpec
 }
 
 /**
@@ -75,12 +126,18 @@ export function classifyParam<T>(
  */
 export function inspectUrl(
   params: Record<string, Param<any>>,
+  options: InspectUrlOptions = {},
   strategy: LocationStrategy = getDefaultStrategy(),
 ): UrlDiagnostics {
   const urlParams = strategy.parse()
   const declared = new Set(Object.keys(params))
+  const deprecatedSet = new Set(
+    deprecatedKeysOf(options.deprecated).filter(k => !declared.has(k))
+  )
+  const present = Object.keys(urlParams)
 
-  const unrecognized = Object.keys(urlParams).filter(k => !declared.has(k))
+  const unrecognized = present.filter(k => !declared.has(k) && !deprecatedSet.has(k))
+  const deprecated = present.filter(k => deprecatedSet.has(k))
   const malformed: KeyedDiagnostic[] = []
   const stale: KeyedDiagnostic[] = []
 
@@ -91,7 +148,7 @@ export function inspectUrl(
     else if (c.state === 'stale') stale.push({ key, raw: c.raw, canonical: c.canonical })
   }
 
-  return { unrecognized, malformed, stale }
+  return { unrecognized, deprecated, malformed, stale }
 }
 
 /**
@@ -105,6 +162,16 @@ export interface CleanUrlPolicy {
   malformed?: 'keep' | 'reset'
   /** What to do with stale values. `'normalize'` re-emits canonical. Default: `'keep'`. */
   stale?: 'keep' | 'normalize'
+  /**
+   * Named keys to strip (optionally migrating first). See `DeprecatedSpec`.
+   * Independent of `unrecognized`.
+   */
+  deprecated?: DeprecatedSpec
+  /**
+   * Fires once per deprecated key actually present in the URL. Default:
+   * `console.warn` with a structured message. Pass `null` to silence.
+   */
+  onDeprecated?: ((info: DeprecatedInfo) => void) | null
 }
 
 /**
@@ -120,21 +187,25 @@ export function cleanUrl(
   policy: CleanUrlPolicy = {},
   strategy: LocationStrategy = getDefaultStrategy(),
 ): UrlDiagnostics {
-  const diag = inspectUrl(params, strategy)
+  const diag = inspectUrl(params, { deprecated: policy.deprecated }, strategy)
   const {
     unrecognized = 'keep',
     malformed = 'keep',
     stale = 'keep',
+    deprecated: depSpec,
+    onDeprecated,
   } = policy
 
   const willStripUnrecognized = unrecognized === 'strip' && diag.unrecognized.length > 0
   const willResetMalformed = malformed === 'reset' && diag.malformed.length > 0
   const willNormalizeStale = stale === 'normalize' && diag.stale.length > 0
-  if (!willStripUnrecognized && !willResetMalformed && !willNormalizeStale) return diag
+  const willHandleDeprecated = diag.deprecated.length > 0
+  if (!willStripUnrecognized && !willResetMalformed && !willNormalizeStale && !willHandleDeprecated) return diag
 
   if (typeof window === 'undefined') return diag
 
-  const next: Record<string, string[]> = { ...strategy.parse() }
+  const current = strategy.parse()
+  const next: Record<string, string[]> = { ...current }
 
   if (willStripUnrecognized) {
     for (const k of diag.unrecognized) delete next[k]
@@ -147,6 +218,28 @@ export function cleanUrl(
   }
   if (willResetMalformed) applyKeyed(diag.malformed)
   if (willNormalizeStale) applyKeyed(diag.stale)
+
+  if (willHandleDeprecated) {
+    const handler = onDeprecated === null ? null
+      : onDeprecated ?? defaultOnDeprecated
+    for (const key of diag.deprecated) {
+      const raw = current[key]?.[0] ?? ''
+      const migrate = migrationFor(depSpec, key)
+      let migrated: Record<string, unknown> | undefined
+      if (migrate) {
+        migrated = migrate(raw)
+        for (const [mk, mv] of Object.entries(migrated)) {
+          const p = params[mk]
+          if (!p) continue
+          const enc = p.encode(mv)
+          if (enc === undefined) delete next[mk]
+          else next[mk] = [enc]
+        }
+      }
+      delete next[key]
+      handler?.({ key, raw, ...(migrated !== undefined && { migrated }) })
+    }
+  }
 
   const url = new URL(window.location.href)
   const updated = strategy.buildUrl(url, next)

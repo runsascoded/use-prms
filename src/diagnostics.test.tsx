@@ -106,7 +106,7 @@ describe('inspectUrl', () => {
   it('canonical URL produces an empty diagnostic', () => {
     window.history.replaceState({}, '', '/?n=42')
     const diag = inspectUrl({ n: intParam(0) })
-    expect(diag).toEqual({ unrecognized: [], malformed: [], stale: [] })
+    expect(diag).toEqual({ unrecognized: [], deprecated: [], malformed: [], stale: [] })
   })
 
   it('handles a mix of all three states in one call', () => {
@@ -262,6 +262,7 @@ describe('useUrlStates diagnostics', () => {
     expect(onDiagnostics).toHaveBeenCalledTimes(1)
     expect(onDiagnostics.mock.calls[0][0]).toEqual({
       unrecognized: ['legacy'],
+      deprecated: [],
       malformed: [{ key: 'known', raw: 'garbage', canonical: undefined }],
       stale: [],
     })
@@ -291,7 +292,134 @@ describe('cleanUrl edge cases', () => {
   it('handles fully canonical URL with no policy', () => {
     window.history.replaceState({}, '', '/?n=5')
     const diag = cleanUrl({ n: intParam(0) })
-    expect(diag).toEqual({ unrecognized: [], malformed: [], stale: [] })
+    expect(diag).toEqual({ unrecognized: [], deprecated: [], malformed: [], stale: [] })
     expect(window.location.search).toBe('?n=5')
+  })
+})
+
+describe('deprecated', () => {
+  // Silence default console.warn so each test opts in explicitly.
+  const silent = { onDeprecated: null as const }
+
+  it('inspectUrl reports declared-deprecated keys that are present', () => {
+    window.history.replaceState({}, '', '/?known=5&v=foo')
+    const diag = inspectUrl({ known: intParam(0) }, { deprecated: ['v'] })
+    expect(diag.deprecated).toEqual(['v'])
+    expect(diag.unrecognized).toEqual([])
+  })
+
+  it('inspectUrl: deprecated absent → empty list, key stays under unrecognized if unknown', () => {
+    window.history.replaceState({}, '', '/?other=foo')
+    const diag = inspectUrl({}, { deprecated: ['v'] })
+    expect(diag.deprecated).toEqual([])
+    expect(diag.unrecognized).toEqual(['other'])
+  })
+
+  it('inspectUrl: declared key in deprecated spec is ignored as deprecated (stays declared)', () => {
+    window.history.replaceState({}, '', '/?n=5')
+    const diag = inspectUrl({ n: intParam(0) }, { deprecated: ['n'] })
+    expect(diag.deprecated).toEqual([])
+    expect(diag.unrecognized).toEqual([])
+  })
+
+  it('cleanUrl strips deprecated keys while keeping other unknowns', () => {
+    window.history.replaceState({}, '', '/?n=5&v=foo&_ga=xyz')
+    cleanUrl({ n: intParam(0) }, { deprecated: ['v'], ...silent })
+    expect(window.location.search).toBe('?n=5&_ga=xyz')
+  })
+
+  it('deprecated + unrecognized:strip is equivalent to plain strip', () => {
+    window.history.replaceState({}, '', '/?v=foo&extra=bar')
+    cleanUrl({}, { deprecated: ['v'], unrecognized: 'strip', ...silent })
+    expect(window.location.search).toBe('')
+  })
+
+  it('deprecated wins over unrecognized:keep', () => {
+    window.history.replaceState({}, '', '/?v=foo&extra=bar')
+    cleanUrl({}, { deprecated: ['v'], ...silent })
+    expect(window.location.search).toBe('?extra=bar')
+  })
+
+  it('no-op when deprecated keys absent', () => {
+    window.history.replaceState({}, '', '/?n=5')
+    const spy = vi.spyOn(history, 'replaceState')
+    cleanUrl({ n: intParam(0) }, { deprecated: ['v'], ...silent })
+    expect(spy).not.toHaveBeenCalled()
+    spy.mockRestore()
+  })
+
+  it('migration: converts old raw → new typed value, then strips old key', () => {
+    window.history.replaceState({}, '', '/?v=40.74_-74.01_11.8')
+    const llz = llzParam({ default: { lat: 0, lng: 0, zoom: 0 } })
+    cleanUrl(
+      { llz },
+      {
+        deprecated: {
+          v: (raw) => {
+            const [lat, lng, zoom] = raw.split('_').map(Number)
+            return { llz: { lat, lng, zoom } }
+          },
+        },
+        ...silent,
+      },
+    )
+    expect(window.location.search).toBe('?llz=40.7400-74.0100+11.80')
+  })
+
+  it('migration: null entry just drops (same as array form)', () => {
+    window.history.replaceState({}, '', '/?v=foo&n=5')
+    cleanUrl({ n: intParam(0) }, { deprecated: { v: null }, ...silent })
+    expect(window.location.search).toBe('?n=5')
+  })
+
+  it('migration: keys not in params are silently skipped', () => {
+    window.history.replaceState({}, '', '/?v=anything&n=5')
+    cleanUrl(
+      { n: intParam(0) },
+      { deprecated: { v: () => ({ undeclared: 'ignored' }) }, ...silent },
+    )
+    // v dropped; undeclared not written
+    expect(window.location.search).toBe('?n=5')
+  })
+
+  it('onDeprecated fires once per deprecated key found', () => {
+    window.history.replaceState({}, '', '/?v=foo&w=bar&n=5')
+    const onDeprecated = vi.fn()
+    cleanUrl({ n: intParam(0) }, { deprecated: ['v', 'w'], onDeprecated })
+    expect(onDeprecated).toHaveBeenCalledTimes(2)
+    expect(onDeprecated).toHaveBeenCalledWith({ key: 'v', raw: 'foo' })
+    expect(onDeprecated).toHaveBeenCalledWith({ key: 'w', raw: 'bar' })
+  })
+
+  it('onDeprecated receives the migration output when a migrator ran', () => {
+    window.history.replaceState({}, '', '/?v=1_2_3')
+    const llz = llzParam({ default: { lat: 0, lng: 0, zoom: 0 } })
+    const onDeprecated = vi.fn()
+    const migrate = (raw: string) => {
+      const [lat, lng, zoom] = raw.split('_').map(Number)
+      return { llz: { lat, lng, zoom } }
+    }
+    cleanUrl({ llz }, { deprecated: { v: migrate }, onDeprecated })
+    expect(onDeprecated).toHaveBeenCalledWith({
+      key: 'v',
+      raw: '1_2_3',
+      migrated: { llz: { lat: 1, lng: 2, zoom: 3 } },
+    })
+  })
+
+  it('default onDeprecated is console.warn', () => {
+    window.history.replaceState({}, '', '/?v=foo')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    cleanUrl({}, { deprecated: ['v'] })
+    expect(warn).toHaveBeenCalledTimes(1)
+    warn.mockRestore()
+  })
+
+  it('onDeprecated: null silences the default warn', () => {
+    window.history.replaceState({}, '', '/?v=foo')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    cleanUrl({}, { deprecated: ['v'], onDeprecated: null })
+    expect(warn).not.toHaveBeenCalled()
+    warn.mockRestore()
   })
 })
