@@ -249,12 +249,46 @@ interface KeyedDiagnostic {
  * Structured report on the URL's relationship to a declared param spec.
  */
 interface UrlDiagnostics {
-    /** Keys present in the URL but not declared in `params`. */
+    /** Keys present in the URL but not declared (and not declared-deprecated). */
     unrecognized: string[];
+    /** Subset of declared-deprecated keys present in the URL. */
+    deprecated: string[];
     /** Declared keys whose URL value is garbage. */
     malformed: KeyedDiagnostic[];
     /** Declared keys whose URL value parses but is non-canonical. */
     stale: KeyedDiagnostic[];
+}
+/** Record of declared params. */
+type Params = Record<string, Param<any>>;
+/** Map a params record `P` to the corresponding decoded-value record. */
+type ParamValues<P extends Params> = {
+    [K in keyof P]: P[K] extends Param<infer T> ? T : never;
+};
+/**
+ * Function form of a deprecated entry: receives the old raw URL value,
+ * returns a partial record from declared param keys to the new typed values.
+ * `cleanUrl` encodes each via `params[k].encode(v)`.
+ */
+type DeprecatedMigration<P extends Params = Params> = (raw: string) => Partial<ParamValues<P>>;
+/**
+ * Declaration of which URL keys are deprecated:
+ * - `string[]`: drop these keys.
+ * - `Record<string, null | DeprecatedMigration<P>>`: `null` drops; a function
+ *   migrates the old value to new typed param values, then drops the old key.
+ */
+type DeprecatedSpec<P extends Params = Params> = readonly string[] | {
+    [key: string]: null | DeprecatedMigration<P>;
+};
+/** Info fired to `onDeprecated` for each deprecated key found in the URL. */
+interface DeprecatedInfo {
+    key: string;
+    raw: string;
+    /** Present only if a migration function ran for this key. */
+    migrated?: Partial<ParamValues<Params>>;
+}
+/** Options accepted by `inspectUrl`. */
+interface InspectUrlOptions<P extends Params = Params> {
+    deprecated?: DeprecatedSpec<P>;
 }
 /**
  * Round-trip classify a single param's URL value. Pure helper; usable
@@ -270,18 +304,28 @@ declare function classifyParam<T>(param: Param<T>, raw: string | undefined): Par
  * Inspect the current URL relative to a declared param spec. Pure — does
  * not mutate the URL.
  */
-declare function inspectUrl(params: Record<string, Param<any>>, strategy?: LocationStrategy): UrlDiagnostics;
+declare function inspectUrl<P extends Params>(params: P, options?: InspectUrlOptions<P>, strategy?: LocationStrategy): UrlDiagnostics;
 /**
  * Policy for `cleanUrl`. Each axis is independent; defaults are conservative
  * (`'keep'` everywhere — `cleanUrl` is a no-op until the caller opts in).
  */
-interface CleanUrlPolicy {
+interface CleanUrlPolicy<P extends Params = Params> {
     /** What to do with unrecognized keys. Default: `'keep'`. */
     unrecognized?: 'keep' | 'strip';
     /** What to do with malformed values. `'reset'` re-emits canonical (stripping the key when canonical is `undefined`). Default: `'keep'`. */
     malformed?: 'keep' | 'reset';
     /** What to do with stale values. `'normalize'` re-emits canonical. Default: `'keep'`. */
     stale?: 'keep' | 'normalize';
+    /**
+     * Named keys to strip (optionally migrating first). See `DeprecatedSpec`.
+     * Independent of `unrecognized`.
+     */
+    deprecated?: DeprecatedSpec<P>;
+    /**
+     * Fires once per deprecated key actually present in the URL. Default:
+     * `console.warn` with a structured message. Pass `null` to silence.
+     */
+    onDeprecated?: ((info: DeprecatedInfo) => void) | null;
 }
 /**
  * Apply a cleanup policy to the current URL in-place (via
@@ -291,7 +335,7 @@ interface CleanUrlPolicy {
  * Calling with the default policy (`{}`) returns diagnostics without
  * touching the URL — equivalent to `inspectUrl`.
  */
-declare function cleanUrl(params: Record<string, Param<any>>, policy?: CleanUrlPolicy, strategy?: LocationStrategy): UrlDiagnostics;
+declare function cleanUrl<P extends Params>(params: P, policy?: CleanUrlPolicy<P>, strategy?: LocationStrategy): UrlDiagnostics;
 
 /**
  * React hooks for managing URL parameters
@@ -324,7 +368,7 @@ interface UseUrlStateOptions {
  * Options for `useUrlStates` (multi-key) — extends single-key options with
  * URL-level reporting and cleanup.
  */
-interface UseUrlStatesOptions extends Omit<UseUrlStateOptions, 'onDiagnostic'> {
+interface UseUrlStatesOptions<P extends Params = Params> extends Omit<UseUrlStateOptions, 'onDiagnostic'> {
     /**
      * Fired with a `UrlDiagnostics` whenever the URL changes. Reports
      * unrecognized keys, malformed values, and stale-format values.
@@ -335,7 +379,7 @@ interface UseUrlStatesOptions extends Omit<UseUrlStateOptions, 'onDiagnostic'> {
      * `onDiagnostics`: callers can observe without acting, or act without
      * observing, or both.
      */
-    cleanOnMount?: CleanUrlPolicy;
+    cleanOnMount?: CleanUrlPolicy<P>;
 }
 /**
  * React hook for managing a single URL query parameter.
@@ -385,7 +429,7 @@ declare function useUrlState<T>(key: string, param: Param<T>, options?: UseUrlSt
  * setValues({ zoom: true, count: 20 })
  * ```
  */
-declare function useUrlStates<P extends Record<string, Param<any>>>(params: P, options?: UseUrlStatesOptions | boolean): {
+declare function useUrlStates<P extends Record<string, Param<any>>>(params: P, options?: UseUrlStatesOptions<P> | boolean): {
     values: {
         [K in keyof P]: P[K] extends Param<infer T> ? T : never;
     };
@@ -1166,4 +1210,4 @@ declare function getCurrentParams(): Record<string, Encoded>;
  */
 declare function updateUrl(params: Record<string, Encoded>, push?: boolean): void;
 
-export { ALPHABETS, type Alphabet, type AlphabetName, BASE64_CHARS, type BBox, type BBoxParamOptions, type Base64Options, type BinaryParamOptions, BitBuffer, type CleanUrlPolicy, type CodeMap, type Encoded, type FixedPoint, type Float, type FloatEncoding, type FloatParamOptions, type KeyedDiagnostic, type LLZ, type LLZParamOptions, type LocationStrategy, type MultiEncoded, type MultiParam, type NumberFieldEncoding, type NumberPath, type NumberTupleField, type NumberTupleParamOptions, precisionSchemes as PRECISION_SCHEMES, type Pagination, type Param, type ParamDiagnostic, type Point, type PointParamOptions, type PrecisionScheme, type UrlDiagnostics, type UseUrlStateOptions, type UseUrlStatesOptions, type ViewState, type ViewStateParamOptions, base64Decode, base64Encode, base64FloatParam, base64Param, bboxParam, binaryParam, boolParam, bytesToFloat, classifyParam, cleanUrl, clearParams, codeParam, codesParam, createLookupMap, defStringParam, encodeFloatAllModes, encodePointAllModes, enumParam, floatParam, floatToBytes, formatSignedParts, fromFixedPoint, fromFloat, getCurrentParams, getDefaultStrategy, hashStrategy, inspectUrl, intParam, llzParam, multiFloatParam, multiIntParam, multiStringParam, notifyLocationChange, numberArrayParam, numberTupleParam, optFloatParam, optIntParam, paginationParam, parseMultiParams, parseParams, parseSignedParts, pointParam, precisionSchemes, queryStrategy, resolveAlphabet, resolvePrecision, serializeMultiParams, serializeParams, setDefaultStrategy, stringParam, stringsParam, toFixedPoint, toFloat, updateUrl, useMultiUrlState, useMultiUrlStates, useUrlState, useUrlStates, validateAlphabet, viewStateParam };
+export { ALPHABETS, type Alphabet, type AlphabetName, BASE64_CHARS, type BBox, type BBoxParamOptions, type Base64Options, type BinaryParamOptions, BitBuffer, type CleanUrlPolicy, type CodeMap, type DeprecatedInfo, type DeprecatedMigration, type DeprecatedSpec, type Encoded, type FixedPoint, type Float, type FloatEncoding, type FloatParamOptions, type InspectUrlOptions, type KeyedDiagnostic, type LLZ, type LLZParamOptions, type LocationStrategy, type MultiEncoded, type MultiParam, type NumberFieldEncoding, type NumberPath, type NumberTupleField, type NumberTupleParamOptions, precisionSchemes as PRECISION_SCHEMES, type Pagination, type Param, type ParamDiagnostic, type ParamValues, type Params, type Point, type PointParamOptions, type PrecisionScheme, type UrlDiagnostics, type UseUrlStateOptions, type UseUrlStatesOptions, type ViewState, type ViewStateParamOptions, base64Decode, base64Encode, base64FloatParam, base64Param, bboxParam, binaryParam, boolParam, bytesToFloat, classifyParam, cleanUrl, clearParams, codeParam, codesParam, createLookupMap, defStringParam, encodeFloatAllModes, encodePointAllModes, enumParam, floatParam, floatToBytes, formatSignedParts, fromFixedPoint, fromFloat, getCurrentParams, getDefaultStrategy, hashStrategy, inspectUrl, intParam, llzParam, multiFloatParam, multiIntParam, multiStringParam, notifyLocationChange, numberArrayParam, numberTupleParam, optFloatParam, optIntParam, paginationParam, parseMultiParams, parseParams, parseSignedParts, pointParam, precisionSchemes, queryStrategy, resolveAlphabet, resolvePrecision, serializeMultiParams, serializeParams, setDefaultStrategy, stringParam, stringsParam, toFixedPoint, toFloat, updateUrl, useMultiUrlState, useMultiUrlStates, useUrlState, useUrlStates, validateAlphabet, viewStateParam };

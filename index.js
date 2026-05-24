@@ -308,6 +308,22 @@ function arraysEqual(a, b) {
 }
 
 // src/diagnostics.ts
+function deprecatedKeysOf(spec) {
+  if (!spec) return [];
+  return Array.isArray(spec) ? [...spec] : Object.keys(spec);
+}
+function migrationFor(spec, key) {
+  if (!spec || Array.isArray(spec)) return null;
+  const v = spec[key];
+  return typeof v === "function" ? v : null;
+}
+var defaultOnDeprecated = ({ key, raw, migrated }) => {
+  if (migrated) {
+    console.warn(`[use-prms] migrated deprecated URL param "${key}"=${raw} \u2192`, migrated);
+  } else {
+    console.warn(`[use-prms] stripping deprecated URL param "${key}"=${raw}`);
+  }
+};
 function classifyParam(param, raw) {
   if (raw === void 0) return { state: "absent" };
   const decoded = param.decode(raw);
@@ -317,10 +333,15 @@ function classifyParam(param, raw) {
   if (reencoded === defaultEncoded) return { state: "malformed", raw, canonical: reencoded };
   return { state: "stale", raw, canonical: reencoded };
 }
-function inspectUrl(params, strategy = getDefaultStrategy()) {
+function inspectUrl(params, options = {}, strategy = getDefaultStrategy()) {
   const urlParams = strategy.parse();
   const declared = new Set(Object.keys(params));
-  const unrecognized = Object.keys(urlParams).filter((k) => !declared.has(k));
+  const deprecatedSet = new Set(
+    deprecatedKeysOf(options.deprecated).filter((k) => !declared.has(k))
+  );
+  const present = Object.keys(urlParams);
+  const unrecognized = present.filter((k) => !declared.has(k) && !deprecatedSet.has(k));
+  const deprecated = present.filter((k) => deprecatedSet.has(k));
   const malformed = [];
   const stale = [];
   for (const key of declared) {
@@ -329,21 +350,25 @@ function inspectUrl(params, strategy = getDefaultStrategy()) {
     if (c.state === "malformed") malformed.push({ key, raw: c.raw, canonical: c.canonical });
     else if (c.state === "stale") stale.push({ key, raw: c.raw, canonical: c.canonical });
   }
-  return { unrecognized, malformed, stale };
+  return { unrecognized, deprecated, malformed, stale };
 }
 function cleanUrl(params, policy = {}, strategy = getDefaultStrategy()) {
-  const diag = inspectUrl(params, strategy);
+  const diag = inspectUrl(params, { deprecated: policy.deprecated }, strategy);
   const {
     unrecognized = "keep",
     malformed = "keep",
-    stale = "keep"
+    stale = "keep",
+    deprecated: depSpec,
+    onDeprecated
   } = policy;
   const willStripUnrecognized = unrecognized === "strip" && diag.unrecognized.length > 0;
   const willResetMalformed = malformed === "reset" && diag.malformed.length > 0;
   const willNormalizeStale = stale === "normalize" && diag.stale.length > 0;
-  if (!willStripUnrecognized && !willResetMalformed && !willNormalizeStale) return diag;
+  const willHandleDeprecated = diag.deprecated.length > 0;
+  if (!willStripUnrecognized && !willResetMalformed && !willNormalizeStale && !willHandleDeprecated) return diag;
   if (typeof window === "undefined") return diag;
-  const next = { ...strategy.parse() };
+  const current = strategy.parse();
+  const next = { ...current };
   if (willStripUnrecognized) {
     for (const k of diag.unrecognized) delete next[k];
   }
@@ -355,6 +380,26 @@ function cleanUrl(params, policy = {}, strategy = getDefaultStrategy()) {
   };
   if (willResetMalformed) applyKeyed(diag.malformed);
   if (willNormalizeStale) applyKeyed(diag.stale);
+  if (willHandleDeprecated) {
+    const handler = onDeprecated === null ? null : onDeprecated ?? defaultOnDeprecated;
+    for (const key of diag.deprecated) {
+      const raw = current[key]?.[0] ?? "";
+      const migrate = migrationFor(depSpec, key);
+      let migrated;
+      if (migrate) {
+        migrated = migrate(raw);
+        for (const [mk, mv] of Object.entries(migrated)) {
+          const p = params[mk];
+          if (!p) continue;
+          const enc = p.encode(mv);
+          if (enc === void 0) delete next[mk];
+          else next[mk] = [enc];
+        }
+      }
+      delete next[key];
+      handler?.({ key, raw, ...migrated !== void 0 && { migrated } });
+    }
+  }
   const url = new URL(window.location.href);
   const updated = strategy.buildUrl(url, next);
   window.history.replaceState({ ...window.history.state }, "", updated);
@@ -611,7 +656,7 @@ function useUrlStates(params, options = {}) {
     },
     [params, writeToUrl, strategy, forceUpdate]
   );
-  const diagnostics = inspectUrl(params, strategy);
+  const diagnostics = inspectUrl(params, { deprecated: cleanOnMount?.deprecated }, strategy);
   const lastDiagSigRef = useRef(null);
   useEffect(() => {
     if (!onDiagnostics) return;
