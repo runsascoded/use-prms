@@ -13,6 +13,7 @@ import {
   inspectUrl,
   type CleanUrlPolicy,
   type ParamDiagnostic,
+  type Params,
   type UrlDiagnostics,
 } from './diagnostics.js'
 
@@ -46,7 +47,7 @@ export interface UseUrlStateOptions {
  * Options for `useUrlStates` (multi-key) — extends single-key options with
  * URL-level reporting and cleanup.
  */
-export interface UseUrlStatesOptions extends Omit<UseUrlStateOptions, 'onDiagnostic'> {
+export interface UseUrlStatesOptions<P extends Params = Params> extends Omit<UseUrlStateOptions, 'onDiagnostic'> {
   /**
    * Fired with a `UrlDiagnostics` whenever the URL changes. Reports
    * unrecognized keys, malformed values, and stale-format values.
@@ -58,7 +59,7 @@ export interface UseUrlStatesOptions extends Omit<UseUrlStateOptions, 'onDiagnos
    * `onDiagnostics`: callers can observe without acting, or act without
    * observing, or both.
    */
-  cleanOnMount?: CleanUrlPolicy
+  cleanOnMount?: CleanUrlPolicy<P>
 }
 
 /**
@@ -350,14 +351,14 @@ export function useUrlState<T>(
  */
 export function useUrlStates<P extends Record<string, Param<any>>>(
   params: P,
-  options: UseUrlStatesOptions | boolean = {}
+  options: UseUrlStatesOptions<P> | boolean = {}
 ): {
   values: { [K in keyof P]: P[K] extends Param<infer T> ? T : never }
   setValues: (updates: Partial<{ [K in keyof P]: P[K] extends Param<infer T> ? T : never }>) => void
   diagnostics: UrlDiagnostics
 } {
   // Handle legacy boolean `push` argument for backwards compatibility
-  const opts: UseUrlStatesOptions = typeof options === 'boolean'
+  const opts: UseUrlStatesOptions<P> = typeof options === 'boolean'
     ? { push: options }
     : options
   const { debounce: debounceMs = 0, push = false, onDiagnostics, cleanOnMount } = opts

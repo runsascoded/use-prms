@@ -98,22 +98,30 @@ A deprecated key never shows up under `unrecognized` (since the caller knows abo
 
 ## Types
 
-```ts
-export type DeprecatedMigration =
-  (raw: string) => Record<string, unknown>
+The policy types are generic over `P extends Params`, so a migration callback's return value is type-checked against the declared params: keys must be `keyof P`, and values must match each `P[K]`'s `T`.
 
-export type DeprecatedSpec =
+```ts
+export type Params = Record<string, Param<any>>
+
+export type ParamValues<P extends Params> = {
+  [K in keyof P]: P[K] extends Param<infer T> ? T : never
+}
+
+export type DeprecatedMigration<P extends Params = Params> =
+  (raw: string) => Partial<ParamValues<P>>
+
+export type DeprecatedSpec<P extends Params = Params> =
   | readonly string[]
-  | Record<string, null | DeprecatedMigration>
+  | { [key: string]: null | DeprecatedMigration<P> }
 
 export interface DeprecatedInfo {
   key: string
   raw: string
   /** Present only if a migration function ran for this key. */
-  migrated?: Record<string, unknown>
+  migrated?: Partial<ParamValues<Params>>
 }
 
-export interface CleanUrlPolicy {
+export interface CleanUrlPolicy<P extends Params = Params> {
   unrecognized?: 'keep' | 'strip'
   malformed?: 'keep' | 'reset'
   stale?: 'keep' | 'normalize'
@@ -121,13 +129,17 @@ export interface CleanUrlPolicy {
    * Named keys to strip (optionally migrating their value first).
    * Independent of `unrecognized`.
    */
-  deprecated?: DeprecatedSpec
+  deprecated?: DeprecatedSpec<P>
   /**
    * Fires once per deprecated key actually present in the URL.
    * Default: `console.warn` with a structured message.
    * Pass `null` to silence.
    */
   onDeprecated?: ((info: DeprecatedInfo) => void) | null
+}
+
+export interface InspectUrlOptions<P extends Params = Params> {
+  deprecated?: DeprecatedSpec<P>
 }
 
 export interface UrlDiagnostics {
@@ -137,6 +149,21 @@ export interface UrlDiagnostics {
   malformed: KeyedDiagnostic[]
   stale: KeyedDiagnostic[]
 }
+```
+
+A typo or wrong value shape in the migration is caught at compile time:
+
+```ts
+cleanUrl(
+  { llz: llzParam(...) },
+  {
+    deprecated: {
+      v: () => ({ undeclared: 'x' }),     // ✗ TS error: not a key of P
+      w: () => ({ llz: 'wrong shape' }),  // ✗ TS error: string not assignable to LLZ
+      u: () => ({ llz: { lat, lng, zoom } }),  // ✓
+    },
+  },
+)
 ```
 
 ## Tests

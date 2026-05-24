@@ -299,7 +299,7 @@ describe('cleanUrl edge cases', () => {
 
 describe('deprecated', () => {
   // Silence default console.warn so each test opts in explicitly.
-  const silent = { onDeprecated: null as const }
+  const silent: { onDeprecated: null } = { onDeprecated: null }
 
   it('inspectUrl reports declared-deprecated keys that are present', () => {
     window.history.replaceState({}, '', '/?known=5&v=foo')
@@ -372,11 +372,16 @@ describe('deprecated', () => {
     expect(window.location.search).toBe('?n=5')
   })
 
-  it('migration: keys not in params are silently skipped', () => {
+  it('migration: keys not in params are silently skipped (defensive runtime)', () => {
     window.history.replaceState({}, '', '/?v=anything&n=5')
     cleanUrl(
       { n: intParam(0) },
-      { deprecated: { v: () => ({ undeclared: 'ignored' }) }, ...silent },
+      {
+        // Tightened types reject this at compile time; the runtime is still
+        // defensive against casts / loosely-typed callers, hence the assertion.
+        deprecated: { v: () => ({ undeclared: 'ignored' } as any) },
+        ...silent,
+      },
     )
     // v dropped; undeclared not written
     expect(window.location.search).toBe('?n=5')
@@ -421,5 +426,47 @@ describe('deprecated', () => {
     cleanUrl({}, { deprecated: ['v'], onDeprecated: null })
     expect(warn).not.toHaveBeenCalled()
     warn.mockRestore()
+  })
+
+  it('migration return type is inferred from params (type-level check)', () => {
+    window.history.replaceState({}, '', '/?v=1_2_3')
+    const llz = llzParam({ default: { lat: 0, lng: 0, zoom: 0 } })
+
+    // ✓ key `llz` matches params; value matches the param's T (LLZ)
+    cleanUrl(
+      { llz },
+      {
+        deprecated: {
+          v: (raw) => {
+            const [lat, lng, zoom] = raw.split('_').map(Number)
+            return { llz: { lat, lng, zoom } }
+          },
+        },
+        onDeprecated: null,
+      },
+    )
+    expect(window.location.search).toBe('?llz=1.0000+2.0000+3.00')
+
+    // ✗ key not in params — caught at compile time
+    window.history.replaceState({}, '', '/?v=foo')
+    cleanUrl(
+      { llz },
+      {
+        // @ts-expect-error 'undeclared' is not a key of { llz: ... }
+        deprecated: { v: () => ({ undeclared: 'x' }) },
+        onDeprecated: null,
+      },
+    )
+
+    // ✗ value shape doesn't match the declared param's T
+    window.history.replaceState({}, '', '/?v=foo')
+    cleanUrl(
+      { llz },
+      {
+        // @ts-expect-error string is not assignable to LLZ
+        deprecated: { v: () => ({ llz: 'not an LLZ' }) },
+        onDeprecated: null,
+      },
+    )
   })
 })

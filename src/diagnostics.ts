@@ -46,39 +46,48 @@ export interface UrlDiagnostics {
   stale: KeyedDiagnostic[]
 }
 
+/** Record of declared params. */
+export type Params = Record<string, Param<any>>
+
+/** Map a params record `P` to the corresponding decoded-value record. */
+export type ParamValues<P extends Params> = {
+  [K in keyof P]: P[K] extends Param<infer T> ? T : never
+}
+
 /**
  * Function form of a deprecated entry: receives the old raw URL value,
- * returns a record from declared param keys to the new typed values.
+ * returns a partial record from declared param keys to the new typed values.
  * `cleanUrl` encodes each via `params[k].encode(v)`.
  */
-export type DeprecatedMigration = (raw: string) => Record<string, unknown>
+export type DeprecatedMigration<P extends Params = Params> =
+  (raw: string) => Partial<ParamValues<P>>
 
 /**
  * Declaration of which URL keys are deprecated:
  * - `string[]`: drop these keys.
- * - `Record<string, null | DeprecatedMigration>`: `null` drops; a function
+ * - `Record<string, null | DeprecatedMigration<P>>`: `null` drops; a function
  *   migrates the old value to new typed param values, then drops the old key.
  */
-export type DeprecatedSpec =
+export type DeprecatedSpec<P extends Params = Params> =
   | readonly string[]
-  | Record<string, null | DeprecatedMigration>
+  | { [key: string]: null | DeprecatedMigration<P> }
 
 /** Info fired to `onDeprecated` for each deprecated key found in the URL. */
 export interface DeprecatedInfo {
   key: string
   raw: string
   /** Present only if a migration function ran for this key. */
-  migrated?: Record<string, unknown>
+  migrated?: Partial<ParamValues<Params>>
 }
 
-function deprecatedKeysOf(spec: DeprecatedSpec | undefined): string[] {
+function deprecatedKeysOf(spec: DeprecatedSpec<any> | undefined): string[] {
   if (!spec) return []
   return Array.isArray(spec) ? [...spec] : Object.keys(spec)
 }
 
-function migrationFor(spec: DeprecatedSpec | undefined, key: string): DeprecatedMigration | null {
+function migrationFor(spec: DeprecatedSpec<any> | undefined, key: string): DeprecatedMigration<any> | null {
   if (!spec || Array.isArray(spec)) return null
-  const v = (spec as Record<string, null | DeprecatedMigration>)[key]
+  const v = (spec as Record<string, null | DeprecatedMigration<any>>)[key]
   return typeof v === 'function' ? v : null
 }
 
@@ -90,9 +99,9 @@ const defaultOnDeprecated = ({ key, raw, migrated }: DeprecatedInfo) => {
   }
 }
 
-/** Options accepted by `inspectUrl` (currently just the deprecated spec). */
-export interface InspectUrlOptions {
-  deprecated?: DeprecatedSpec
+/** Options accepted by `inspectUrl`. */
+export interface InspectUrlOptions<P extends Params = Params> {
+  deprecated?: DeprecatedSpec<P>
 }
 
 /**
@@ -124,9 +133,9 @@ export function classifyParam<T>(
  * Inspect the current URL relative to a declared param spec. Pure — does
  * not mutate the URL.
  */
-export function inspectUrl(
-  params: Record<string, Param<any>>,
-  options: InspectUrlOptions = {},
+export function inspectUrl<P extends Params>(
+  params: P,
+  options: InspectUrlOptions<P> = {},
   strategy: LocationStrategy = getDefaultStrategy(),
 ): UrlDiagnostics {
   const urlParams = strategy.parse()
@@ -155,7 +164,7 @@ export function inspectUrl(
  * Policy for `cleanUrl`. Each axis is independent; defaults are conservative
  * (`'keep'` everywhere — `cleanUrl` is a no-op until the caller opts in).
  */
-export interface CleanUrlPolicy {
+export interface CleanUrlPolicy<P extends Params = Params> {
   /** What to do with unrecognized keys. Default: `'keep'`. */
   unrecognized?: 'keep' | 'strip'
   /** What to do with malformed values. `'reset'` re-emits canonical (stripping the key when canonical is `undefined`). Default: `'keep'`. */
@@ -166,7 +175,7 @@ export interface CleanUrlPolicy {
    * Named keys to strip (optionally migrating first). See `DeprecatedSpec`.
    * Independent of `unrecognized`.
    */
-  deprecated?: DeprecatedSpec
+  deprecated?: DeprecatedSpec<P>
   /**
    * Fires once per deprecated key actually present in the URL. Default:
    * `console.warn` with a structured message. Pass `null` to silence.
@@ -182,9 +191,9 @@ export interface CleanUrlPolicy {
  * Calling with the default policy (`{}`) returns diagnostics without
  * touching the URL — equivalent to `inspectUrl`.
  */
-export function cleanUrl(
-  params: Record<string, Param<any>>,
-  policy: CleanUrlPolicy = {},
+export function cleanUrl<P extends Params>(
+  params: P,
+  policy: CleanUrlPolicy<P> = {},
   strategy: LocationStrategy = getDefaultStrategy(),
 ): UrlDiagnostics {
   const diag = inspectUrl(params, { deprecated: policy.deprecated }, strategy)

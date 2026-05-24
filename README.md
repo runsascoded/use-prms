@@ -464,6 +464,8 @@ useEffect(() => {
 
 Surgical (only the named keys are touched, third-party params survive), independent of `unrecognized`, and both the strip and the migration land in one `replaceState`. `inspectUrl` mirrors this: `inspectUrl(params, { deprecated: [...] })` returns a `deprecated: string[]` field reporting which listed keys are actually in the URL.
 
+Migration callbacks are type-checked against the declared `params`: keys must be declared, and values must match each param's `T`. A typo (`{ ll: ... }` instead of `{ llz: ... }`) or wrong value shape is caught at compile time, not at runtime.
+
 ## Framework-Agnostic Core <a id="core"></a>
 
 Use the core utilities without React:
@@ -622,9 +624,10 @@ type MultiParam<T> = {
 | `cleanUrl(params, policy?, strategy?)` | Mutates URL per `CleanUrlPolicy` (defaults are all `'keep'`); returns observed diagnostics |
 | `ParamDiagnostic` | Per-key state tagged union |
 | `UrlDiagnostics` | `{ unrecognized, deprecated: string[], malformed: KeyedDiagnostic[], stale: KeyedDiagnostic[] }` |
-| `CleanUrlPolicy` | `{ unrecognized?, malformed?, stale?, deprecated?: DeprecatedSpec, onDeprecated?: (info) => void \| null }` |
-| `DeprecatedSpec` | `readonly string[] \| Record<string, null \| (raw: string) => Record<string, unknown>>` |
-| `DeprecatedInfo` | `{ key: string, raw: string, migrated?: Record<string, unknown> }` |
+| `CleanUrlPolicy<P>` | `{ unrecognized?, malformed?, stale?, deprecated?: DeprecatedSpec<P>, onDeprecated?: ((info) => void) \| null }` |
+| `DeprecatedSpec<P>` | `readonly string[] \| Record<string, null \| ((raw: string) => Partial<ParamValues<P>>)>` |
+| `DeprecatedInfo` | `{ key: string, raw: string, migrated?: Partial<ParamValues<Params>> }` |
+| `ParamValues<P>` | `{ [K in keyof P]: P[K] extends Param<infer T> ? T : never }` — exported helper |
 
 ## Examples <a id="examples"></a>
 
