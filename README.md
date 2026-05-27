@@ -372,6 +372,62 @@ const vs = viewStateParam({ default: null, pitchFallback: 45 })
 
 All three accept `signDelim`, `delimiter`, and per-field decimal options.
 
+## Tag Filters <a id="tag-filter"></a>
+
+`tagFilterParam<T>` encodes a tri-state tag filter: each tag is independently `'in'` (item must have), `'out'` (must not have), or `'off'` (no constraint). Per-tag *defaults* are part of the param spec, and only **overrides of those defaults** land in the URL — clean URLs stay clean.
+
+```typescript
+import { tagFilterParam, useUrlState } from 'use-prms'
+
+type RunTag = 'AR' | 'MaskGIT' | 'CE' | 'EMD' | 'bunk' | 'smoke'
+
+const [filters, setFilters] = useUrlState(
+  'tags',
+  tagFilterParam<RunTag>({
+    defaults: { bunk: 'out' },  // tags not listed default to 'off'
+  }),
+)
+// filters: Map<RunTag, 'in' | 'out' | 'off'>   (overrides only)
+```
+
+URL encoding mirrors the `numberTupleParam` sign-as-delim convention: tokens are space-separated (which `URLSearchParams` encodes as `+`), with single-char prefixes selecting state.
+
+| Filter Map                          | URL                  |
+| ----------------------------------- | -------------------- |
+| `{}` (all defaults)                 | (param absent)       |
+| `{ CE: 'in' }`                      | `?tags=CE`           |
+| `{ CE: 'in', EMD: 'out' }`          | `?tags=CE+-EMD`      |
+| `{ bunk: 'off' }`                   | `?tags=~bunk`        |
+| `{ CE: 'in', bunk: 'off' }`         | `?tags=CE+~bunk`     |
+| `{ 'CE+EMD': 'in' }`                | `?tags=CE%2BEMD`     |
+
+Defaults: `in: ''`, `out: '-'`, `off: '~'`. Override via `prefixes: { in?, out?, off? }`; `out` and `off` must be non-empty and distinct. Tag names that begin with a configured prefix (or contain whitespace) throw at construction time.
+
+### Helpers
+
+`use-prms` exports three standalone helpers for working with the resulting `Map`. They each take the per-tag defaults as their last argument (so you can keep the defaults next to the param definition):
+
+```typescript
+import {
+  effectiveTagState, runPassesTagFilters, cycleTagFilter,
+} from 'use-prms'
+
+const defaults = { bunk: 'out' } as const
+
+effectiveTagState(filters, 'bunk', defaults)
+// → 'out' when filters has no 'bunk' override
+
+runPassesTagFilters(item.tags, filters, defaults)
+// → boolean — AND across all 'in'/'out' constraints (defaults included)
+
+setFilters(cycleTagFilter(filters, 'CE', defaults))
+// Advance CE one step around in → out → off → in.
+// If the new state matches the per-tag default, the entry is removed
+// from the Map so the URL stays minimal. Returns a fresh Map.
+```
+
+`cycleTagFilter` accepts an optional fourth argument to override the cycle order (default `['in', 'out', 'off']`); e.g. pass `['off', 'in', 'out']` to visit `'in'` before `'out'`.
+
 ## URL Diagnostics <a id="diagnostics"></a>
 
 `use-prms` can report on the relationship between the URL and your declared param spec — which keys are unrecognized, which values are malformed (decoded to default), and which are stale (parsed but in non-canonical format). Reporting and cleanup are decoupled: you can observe without acting, act without observing, or both.
@@ -581,6 +637,7 @@ type MultiParam<T> = {
 | `llzParam(opts)` | `Param<LLZ>` | Lat/lng/zoom (+ optional pitch/bearing) |
 | `bboxParam(opts)` | `Param<BBox>` | Bounding box (`sw`/`ne` corners) |
 | `viewStateParam(opts)` | `Param<ViewState \| null>` | deck.gl camera state; nullable default for "no override" |
+| `tagFilterParam<T>(opts?)` | `Param<Map<T, TagState>>` | Tri-state tag filter (`'in'`/`'out'`/`'off'`) with per-tag defaults; encodes overrides only |
 
 ### Built-in MultiParam Types
 
@@ -628,6 +685,18 @@ type MultiParam<T> = {
 | `DeprecatedSpec<P>` | `readonly string[] \| Record<string, null \| ((raw: string) => Partial<ParamValues<P>>)>` |
 | `DeprecatedInfo` | `{ key: string, raw: string, migrated?: Partial<ParamValues<Params>> }` |
 | `ParamValues<P>` | `{ [K in keyof P]: P[K] extends Param<infer T> ? T : never }` — exported helper |
+
+### Tag Filter helpers
+
+| Export | Description |
+|--------|-------------|
+| `TagState` | `'in' \| 'out' \| 'off'` |
+| `TagFilters<T>` | `Map<T, TagState>` — overrides only |
+| `TagDefaults<T>` | `Partial<Record<T, TagState>>` |
+| `effectiveTagState(filters, tag, defaults?)` | Override if present, else per-tag default (else `'off'`) |
+| `runPassesTagFilters(itemTags, filters, defaults?)` | `boolean` — AND across all `in`/`out` constraints |
+| `cycleTagFilter(filters, tag, defaults?, cycle?)` | Returns a new Map; entry is removed if new state matches default |
+| `DEFAULT_TAG_CYCLE` | `readonly ['in', 'out', 'off']` |
 
 ## Examples <a id="examples"></a>
 
