@@ -1166,6 +1166,95 @@ declare function parseSignedParts(s: string, delimiter: string, signDelim: boole
 declare function numberTupleParam<T extends object>(opts: NumberTupleParamOptions<T>): Param<T>;
 
 /**
+ * `tagFilterParam`: tri-state tag filter (in / out / off) with per-tag
+ * defaults. URL encoding uses sign-prefix tokens — `'in'` bare, `'out'`
+ * `-`-prefixed, `'off'` `~`-prefixed — joined by spaces (which
+ * `URLSearchParams` encodes as `+`). Mirrors the sign-as-delim convention
+ * `numberTupleParam` uses for signed numbers.
+ *
+ * Only *overrides* of per-tag defaults are encoded, so clean URLs stay
+ * clean. Decoding is lenient: redundant entries that match the default
+ * (or unknown tags) round-trip cleanly through `cleanUrl({ stale:
+ * 'normalize' })`, but `decode` itself preserves them so callers can
+ * detect/log non-canonical input via the diagnostics layer.
+ */
+
+/**
+ * Per-tag filter state.
+ * - `'in'`: items must have this tag
+ * - `'out'`: items must NOT have this tag
+ * - `'off'`: no constraint (only ever stored as an *override* of a
+ *           non-`off` default — see {@link cycleTagFilter})
+ */
+type TagState = 'in' | 'out' | 'off';
+/**
+ * Overrides-only map of tag → state. A tag absent from the Map is
+ * implicitly at its per-tag default (see {@link TagDefaults}). Using a
+ * `Map` (rather than `Record`) preserves insertion order, which keeps
+ * URLs stable across user interactions.
+ */
+type TagFilters<T extends string = string> = Map<T, TagState>;
+/**
+ * Per-tag default state. Tags absent here implicitly default to `'off'`.
+ */
+type TagDefaults<T extends string = string> = Partial<Record<T, TagState>>;
+/**
+ * Token prefixes used in the URL encoding. Each must be distinct; `out`
+ * and `off` must be non-empty (the `in` prefix may be empty so bare tags
+ * read as `in`).
+ */
+interface TagPrefixes {
+    /** Default: `''` (bare). */
+    in?: string;
+    /** Default: `'-'`. */
+    out?: string;
+    /** Default: `'~'`. */
+    off?: string;
+}
+interface TagFilterParamOptions<T extends string> {
+    /** Per-tag defaults. Tags not listed default to `'off'`. */
+    defaults?: TagDefaults<T>;
+    /** Override the default URL prefixes. */
+    prefixes?: TagPrefixes;
+}
+/** Default cycle order used by {@link cycleTagFilter} when no explicit
+ *  `cycle` is provided: `in → out → off → in`. */
+declare const DEFAULT_TAG_CYCLE: readonly TagState[];
+/**
+ * Effective state for `tag`: the override if present in `filters`,
+ * otherwise the per-tag default.
+ */
+declare function effectiveTagState<T extends string>(filters: TagFilters<T>, tag: T, defaults?: TagDefaults<T>): TagState;
+/**
+ * Apply the (overrides + defaults) tag filter to an item's tags.
+ * Returns true iff every constrained tag's `in`/`out` rule is satisfied
+ * (`off` tags impose no constraint). Iterates the union of `filters`
+ * keys and `defaults` keys — both can carry constraints.
+ */
+declare function runPassesTagFilters<T extends string>(itemTags: readonly T[], filters: TagFilters<T>, defaults?: TagDefaults<T>): boolean;
+/**
+ * Advance `tag` one step around `cycle` (default `in → out → off → in`).
+ * If the resulting state matches the tag's default, the entry is
+ * *removed* from the Map (so the URL stays minimal). Returns a fresh
+ * `Map`; never mutates the input.
+ */
+declare function cycleTagFilter<T extends string>(filters: TagFilters<T>, tag: T, defaults?: TagDefaults<T>, cycle?: readonly TagState[]): TagFilters<T>;
+/**
+ * Create a {@link Param} for tri-state tag filters. See module docs.
+ *
+ * @example
+ * ```ts
+ * type RunTag = 'CE' | 'EMD' | 'bunk'
+ * const [filters, setFilters] = useUrlState(
+ *   'tags',
+ *   tagFilterParam<RunTag>({ defaults: { bunk: 'out' } }),
+ * )
+ * // ?tags=CE+~bunk → Map([['CE', 'in'], ['bunk', 'off']])
+ * ```
+ */
+declare function tagFilterParam<T extends string>(options?: TagFilterParamOptions<T>): Param<TagFilters<T>>;
+
+/**
  * Core types and utilities for URL parameter management
  */
 
@@ -1210,4 +1299,4 @@ declare function getCurrentParams(): Record<string, Encoded>;
  */
 declare function updateUrl(params: Record<string, Encoded>, push?: boolean): void;
 
-export { ALPHABETS, type Alphabet, type AlphabetName, BASE64_CHARS, type BBox, type BBoxParamOptions, type Base64Options, type BinaryParamOptions, BitBuffer, type CleanUrlPolicy, type CodeMap, type DeprecatedInfo, type DeprecatedMigration, type DeprecatedSpec, type Encoded, type FixedPoint, type Float, type FloatEncoding, type FloatParamOptions, type InspectUrlOptions, type KeyedDiagnostic, type LLZ, type LLZParamOptions, type LocationStrategy, type MultiEncoded, type MultiParam, type NumberFieldEncoding, type NumberPath, type NumberTupleField, type NumberTupleParamOptions, precisionSchemes as PRECISION_SCHEMES, type Pagination, type Param, type ParamDiagnostic, type ParamValues, type Params, type Point, type PointParamOptions, type PrecisionScheme, type UrlDiagnostics, type UseUrlStateOptions, type UseUrlStatesOptions, type ViewState, type ViewStateParamOptions, base64Decode, base64Encode, base64FloatParam, base64Param, bboxParam, binaryParam, boolParam, bytesToFloat, classifyParam, cleanUrl, clearParams, codeParam, codesParam, createLookupMap, defStringParam, encodeFloatAllModes, encodePointAllModes, enumParam, floatParam, floatToBytes, formatSignedParts, fromFixedPoint, fromFloat, getCurrentParams, getDefaultStrategy, hashStrategy, inspectUrl, intParam, llzParam, multiFloatParam, multiIntParam, multiStringParam, notifyLocationChange, numberArrayParam, numberTupleParam, optFloatParam, optIntParam, paginationParam, parseMultiParams, parseParams, parseSignedParts, pointParam, precisionSchemes, queryStrategy, resolveAlphabet, resolvePrecision, serializeMultiParams, serializeParams, setDefaultStrategy, stringParam, stringsParam, toFixedPoint, toFloat, updateUrl, useMultiUrlState, useMultiUrlStates, useUrlState, useUrlStates, validateAlphabet, viewStateParam };
+export { ALPHABETS, type Alphabet, type AlphabetName, BASE64_CHARS, type BBox, type BBoxParamOptions, type Base64Options, type BinaryParamOptions, BitBuffer, type CleanUrlPolicy, type CodeMap, DEFAULT_TAG_CYCLE, type DeprecatedInfo, type DeprecatedMigration, type DeprecatedSpec, type Encoded, type FixedPoint, type Float, type FloatEncoding, type FloatParamOptions, type InspectUrlOptions, type KeyedDiagnostic, type LLZ, type LLZParamOptions, type LocationStrategy, type MultiEncoded, type MultiParam, type NumberFieldEncoding, type NumberPath, type NumberTupleField, type NumberTupleParamOptions, precisionSchemes as PRECISION_SCHEMES, type Pagination, type Param, type ParamDiagnostic, type ParamValues, type Params, type Point, type PointParamOptions, type PrecisionScheme, type TagDefaults, type TagFilterParamOptions, type TagFilters, type TagPrefixes, type TagState, type UrlDiagnostics, type UseUrlStateOptions, type UseUrlStatesOptions, type ViewState, type ViewStateParamOptions, base64Decode, base64Encode, base64FloatParam, base64Param, bboxParam, binaryParam, boolParam, bytesToFloat, classifyParam, cleanUrl, clearParams, codeParam, codesParam, createLookupMap, cycleTagFilter, defStringParam, effectiveTagState, encodeFloatAllModes, encodePointAllModes, enumParam, floatParam, floatToBytes, formatSignedParts, fromFixedPoint, fromFloat, getCurrentParams, getDefaultStrategy, hashStrategy, inspectUrl, intParam, llzParam, multiFloatParam, multiIntParam, multiStringParam, notifyLocationChange, numberArrayParam, numberTupleParam, optFloatParam, optIntParam, paginationParam, parseMultiParams, parseParams, parseSignedParts, pointParam, precisionSchemes, queryStrategy, resolveAlphabet, resolvePrecision, runPassesTagFilters, serializeMultiParams, serializeParams, setDefaultStrategy, stringParam, stringsParam, tagFilterParam, toFixedPoint, toFloat, updateUrl, useMultiUrlState, useMultiUrlStates, useUrlState, useUrlStates, validateAlphabet, viewStateParam };

@@ -1777,6 +1777,112 @@ function bboxParam(opts) {
   });
 }
 
+// src/tagFilter.ts
+var DEFAULT_PREFIXES = { in: "", out: "-", off: "~" };
+var DEFAULT_TAG_CYCLE = ["in", "out", "off"];
+function validatePrefixes(p) {
+  if (p.out === "") throw new Error("tagFilterParam: prefixes.out must be non-empty");
+  if (p.off === "") throw new Error("tagFilterParam: prefixes.off must be non-empty");
+  const seen = /* @__PURE__ */ new Set();
+  for (const [k, v] of Object.entries(p)) {
+    if (seen.has(v)) throw new Error(`tagFilterParam: duplicate prefix ${JSON.stringify(v)} (${k})`);
+    seen.add(v);
+  }
+}
+function validateTagName(tag, p) {
+  if (/\s/.test(tag)) {
+    throw new Error(`tagFilterParam: tag name ${JSON.stringify(tag)} contains whitespace`);
+  }
+  for (const [kind, prefix] of Object.entries(p)) {
+    if (prefix !== "" && tag.startsWith(prefix)) {
+      throw new Error(
+        `tagFilterParam: tag name ${JSON.stringify(tag)} starts with reserved ${kind}-prefix ${JSON.stringify(prefix)}`
+      );
+    }
+  }
+}
+function defaultStateOf(defaults, tag) {
+  return defaults?.[tag] ?? "off";
+}
+function effectiveTagState(filters, tag, defaults) {
+  return filters.get(tag) ?? defaultStateOf(defaults, tag);
+}
+function runPassesTagFilters(itemTags, filters, defaults) {
+  const constrained = /* @__PURE__ */ new Set([
+    ...filters.keys(),
+    ...defaults ? Object.keys(defaults) : []
+  ]);
+  for (const tag of constrained) {
+    const state = effectiveTagState(filters, tag, defaults);
+    if (state === "off") continue;
+    const has = itemTags.includes(tag);
+    if (state === "in" && !has) return false;
+    if (state === "out" && has) return false;
+  }
+  return true;
+}
+function cycleTagFilter(filters, tag, defaults, cycle = DEFAULT_TAG_CYCLE) {
+  if (cycle.length === 0) throw new Error("cycleTagFilter: cycle must be non-empty");
+  const current = effectiveTagState(filters, tag, defaults);
+  const idx = cycle.indexOf(current);
+  const next = idx === -1 ? cycle[0] : cycle[(idx + 1) % cycle.length];
+  const defaultState = defaultStateOf(defaults, tag);
+  const out = new Map(filters);
+  if (next === defaultState) out.delete(tag);
+  else out.set(tag, next);
+  return out;
+}
+function tagFilterParam(options = {}) {
+  const prefixes = { ...DEFAULT_PREFIXES, ...options.prefixes };
+  validatePrefixes(prefixes);
+  const defaults = options.defaults;
+  if (defaults) {
+    for (const tag of Object.keys(defaults)) validateTagName(tag, prefixes);
+  }
+  const orderedPrefixes = ["out", "off", "in"].map((s) => [s, prefixes[s]]).sort((a, b) => b[1].length - a[1].length);
+  function encodeToken(tag, state) {
+    validateTagName(tag, prefixes);
+    return prefixes[state] + tag;
+  }
+  function classifyToken(tok) {
+    if (prefixes.in !== "+" && tok.startsWith("+")) {
+      const tag = tok.slice(1);
+      if (!tag) return null;
+      return { state: "in", tag };
+    }
+    for (const [state, prefix] of orderedPrefixes) {
+      if (prefix === "" || tok.startsWith(prefix)) {
+        const tag = prefix === "" ? tok : tok.slice(prefix.length);
+        if (!tag) return null;
+        return { state, tag };
+      }
+    }
+    return null;
+  }
+  return {
+    encode(filters) {
+      const parts = [];
+      for (const [tag, state] of filters) {
+        if (state === defaultStateOf(defaults, tag)) continue;
+        parts.push(encodeToken(tag, state));
+      }
+      if (parts.length === 0) return void 0;
+      return parts.join(" ");
+    },
+    decode(encoded) {
+      const out = /* @__PURE__ */ new Map();
+      if (!encoded) return out;
+      for (const tok of encoded.split(/\s+/)) {
+        if (!tok) continue;
+        const c = classifyToken(tok);
+        if (!c) continue;
+        out.set(c.tag, c.state);
+      }
+      return out;
+    }
+  };
+}
+
 // src/index.ts
 function serializeParams(params) {
   const searchParams = new URLSearchParams();
@@ -1824,6 +1930,7 @@ function updateUrl(params, push = false) {
 exports.ALPHABETS = ALPHABETS;
 exports.BASE64_CHARS = BASE64_CHARS;
 exports.BitBuffer = BitBuffer;
+exports.DEFAULT_TAG_CYCLE = DEFAULT_TAG_CYCLE;
 exports.PRECISION_SCHEMES = precisionSchemes;
 exports.base64Decode = base64Decode;
 exports.base64Encode = base64Encode;
@@ -1839,7 +1946,9 @@ exports.clearParams = clearParams;
 exports.codeParam = codeParam;
 exports.codesParam = codesParam;
 exports.createLookupMap = createLookupMap;
+exports.cycleTagFilter = cycleTagFilter;
 exports.defStringParam = defStringParam;
+exports.effectiveTagState = effectiveTagState;
 exports.encodeFloatAllModes = encodeFloatAllModes;
 exports.encodePointAllModes = encodePointAllModes;
 exports.enumParam = enumParam;
@@ -1871,11 +1980,13 @@ exports.precisionSchemes = precisionSchemes;
 exports.queryStrategy = queryStrategy;
 exports.resolveAlphabet = resolveAlphabet;
 exports.resolvePrecision = resolvePrecision;
+exports.runPassesTagFilters = runPassesTagFilters;
 exports.serializeMultiParams = serializeMultiParams;
 exports.serializeParams = serializeParams;
 exports.setDefaultStrategy = setDefaultStrategy;
 exports.stringParam = stringParam;
 exports.stringsParam = stringsParam;
+exports.tagFilterParam = tagFilterParam;
 exports.toFixedPoint = toFixedPoint;
 exports.toFloat = toFloat;
 exports.updateUrl = updateUrl;
