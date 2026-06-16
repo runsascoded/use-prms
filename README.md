@@ -198,6 +198,59 @@ const { values, setValues } = useUrlStates({
 setValues({ page: 2, size: 50 })
 ```
 
+## Multi-key State <a id="alias"></a>
+
+`useUrlAlias` resolves one logical value sourced from several URL keys —
+the canonical key plus zero-or-more *aliases* — and normalizes the URL on
+mount so shared links are predictable.
+
+The prototypical case is supporting two URL spellings of the same id:
+
+```typescript
+import { stringParam, useUrlAlias } from 'use-prms'
+import type { Param } from 'use-prms'
+
+// Alias decoder: bare numeric id ↔ canonical `mp-<id>` form
+const mpAliasParam: Param<string | undefined> = {
+  encode: v => v ? v.slice(3) : undefined,
+  decode: v => v ? `mp-${v}` : undefined,
+}
+
+const [materialId, setMaterialId] = useUrlAlias<string>({
+  keys: ['m', 'mp'] as const,                       // index 0 = canonical
+  params: { m: stringParam(), mp: mpAliasParam },
+  merge: ({ m, mp }) => {
+    if (m && mp && m !== mp) return new Error(`m=${m} vs mp=${mp}`)
+    return m ?? mp
+  },
+})
+```
+
+Behavior:
+
+| input URL | after mount | `materialId` |
+|-----------|-------------|--------------|
+| `?m=mp-2375705` | `?m=mp-2375705` (unchanged) | `'mp-2375705'` |
+| `?mp=2375705` | `?m=mp-2375705` (alias adopted, stripped) | `'mp-2375705'` |
+| `?m=mp-149&mp=2375705` | `?m=mp-149` (canonical wins, conflict warned) | `'mp-149'` |
+| *(none)* | *(none)* | `undefined` |
+
+`setMaterialId` always writes to the canonical key (`m`), never the
+alias.
+
+### Options
+
+- `keys`: ordered tuple — index 0 is the canonical write target, the
+  rest are read-only aliases.
+- `params`: per-key `Param<T | undefined>`. Different aliases can use
+  different decoders (e.g. `mp` maps `'2375705' → 'mp-2375705'`).
+- `merge(vals)`: combine the decoded values into one. Return the value
+  (or `undefined`), or return / throw an `Error` to signal a conflict.
+- `onConflict`: `'warn'` (default — `console.warn` + adopt the canonical
+  key's decoded value), `'throw'`, or a callback `(err: Error) => void`.
+- `canonicalizeOnMount`: default `true`. Strips alias keys and rewrites
+  the canonical key on first render. Set `false` to leave the URL alone.
+
 ## URL Encoding <a id="encoding"></a>
 
 - **Spaces**: Encoded as `+` (standard form-urlencoded)
@@ -593,6 +646,18 @@ React hook for managing multiple multi-value URL parameters together.
 - `params`: Object mapping keys to MultiParam types
 - `options`: Same as `useUrlState`
 - Returns: `{ values, setValues }`
+
+### `useUrlAlias<T>(input)`
+
+React hook for one logical value sourced from N URL keys, with a
+designated canonical key for writes. See [Multi-key State](#alias).
+
+- `input.keys`: ordered tuple — index 0 canonical, rest aliases
+- `input.params`: per-key `Param<T | undefined>`
+- `input.merge`: combines decoded values into the resolved state
+- `input.onConflict?`: `'warn'` (default) | `'throw'` | `(err: Error) => void`
+- `input.canonicalizeOnMount?`: default `true`
+- Returns: `[value: T | undefined, setValue: (v: T | undefined) => void]`
 
 ### `Param<T>`
 
