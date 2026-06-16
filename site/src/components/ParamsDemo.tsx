@@ -22,6 +22,7 @@ const paramColors = [
   'rgba(20, 184, 166, 0.15)',   // teal
   'rgba(239, 68, 68, 0.15)',    // red
   'rgba(107, 114, 128, 0.15)',  // gray
+  'rgba(132, 204, 22, 0.15)',   // lime (alias)
 ] as const
 
 // Stronger versions for hover
@@ -36,6 +37,7 @@ const paramColorsStrong = [
   'rgba(20, 184, 166, 0.35)',
   'rgba(239, 68, 68, 0.35)',
   'rgba(107, 114, 128, 0.35)',
+  'rgba(132, 204, 22, 0.35)',   // lime (alias)
 ] as const
 
 // Map param keys to color indices (params in same section share color)
@@ -57,6 +59,9 @@ const paramKeyColors: Record<string, number> = {
   f: 9,      // approx float - Approximate Encoding section
   xy: 9,     // point - Point Encoding section
   ll: 9,     // map view - Map View section
+  m: 10,     // material id (alias canonical)
+  mp: 10,    // material id (alias shorthand)
+  _: 1,      // flag pack (reuse pink — string-ish)
 }
 
 // Keys that should highlight together (same section)
@@ -66,6 +71,7 @@ const keyGroups: string[][] = [
   ['tag', 'id'],           // Multi-Value section
   ['bx', 'by'],            // Batch section
   ['v', 'f', 'xy', 'll'],  // Binary Encoding sections
+  ['m', 'mp'],             // Alias section
 ]
 
 // Map param keys to section ids for click-to-jump
@@ -87,6 +93,9 @@ const paramKeySections: Record<string, string> = {
   f: 'section-approximate',
   xy: 'section-point',
   ll: 'section-map',
+  m: 'section-alias',
+  mp: 'section-alias',
+  _: 'section-flagpack',
 }
 
 // Expand a set of active keys to include all keys in the same group
@@ -200,6 +209,10 @@ export interface ParamValues {
   setMultiIds: (v: number[]) => void
   batch: { bx: number; by: number }
   setBatch: (v: Partial<{ bx: number; by: number }>) => void
+  materialId: string | undefined
+  setMaterialId: (v: string | undefined) => void
+  flags: { Z: boolean; H: boolean; A: boolean; C: boolean; L: boolean; E: boolean }
+  setFlags: (v: { Z: boolean; H: boolean; A: boolean; C: boolean; L: boolean; E: boolean }) => void
   // Hook for FloatDemo (passed from parent to use correct mode)
   useUrlState: typeof useUrlState
 }
@@ -222,6 +235,8 @@ export function ParamsDemo({
   multiTags, setMultiTags,
   multiIds, setMultiIds,
   batch, setBatch,
+  materialId, setMaterialId,
+  flags, setFlags,
   useUrlState,
 }: ParamsDemoProps) {
   const location = useLocation()
@@ -652,6 +667,95 @@ const { values, setValues } = useUrlStates({
 })
 // values.bx, values.by
 // setValues({ bx: 100, by: 200 }) - updates both atomically`}</pre>
+        </details>
+      </section>
+
+      {/* Multi-key Alias */}
+      <section id="section-alias" className="section" style={getSectionStyle(['m', 'mp'])} onMouseEnter={activate('m', 'mp')} onMouseLeave={deactivate}>
+        <h2>Multi-key Alias (useUrlAlias)</h2>
+        <p className="section-intro">
+          One logical value sourced from N URL keys, with a designated <em>canonical</em> key for writes.
+          Here the same <code>materialId</code> reads from either <code>?m=mp-XXX</code> (canonical) or <code>?mp=XXX</code> (shorthand);
+          on mount the URL normalizes to the canonical form.
+        </p>
+        <div className="controls">
+          <div className="control-group">
+            <label>Material ID</label>
+            <input
+              type="text"
+              value={materialId ?? ''}
+              onChange={e => setMaterialId(e.target.value || undefined)}
+              onFocus={activate('m', 'mp')}
+              onBlur={deactivate}
+              placeholder="e.g. mp-2375705"
+            />
+          </div>
+        </div>
+        <div className="examples">
+          <h3>Try these URLs:</h3>
+          <ul>
+            {mode === 'query' ? (
+              <>
+                <li><span className="try-label">Canonical</span> <Link to="/?m=mp-2375705" className="example-url">?m=mp-2375705</Link> <span style={{ opacity: 0.7 }}>(unchanged)</span></li>
+                <li><span className="try-label">Alias</span> <Link to="/?mp=2375705" className="example-url">?mp=2375705</Link> <span style={{ opacity: 0.7 }}>→ <code>?m=mp-2375705</code></span></li>
+                <li><span className="try-label">Conflict</span> <Link to="/?m=mp-149&mp=2375705" className="example-url">?m=mp-149&mp=2375705</Link> <span style={{ opacity: 0.7 }}>→ <code>?m=mp-149</code> (canonical wins, warned)</span></li>
+              </>
+            ) : (
+              <>
+                <li><span className="try-label">Canonical</span> <Link to="/hash#m=mp-2375705" className="example-url">#m=mp-2375705</Link> <span style={{ opacity: 0.7 }}>(unchanged)</span></li>
+                <li><span className="try-label">Alias</span> <Link to="/hash#mp=2375705" className="example-url">#mp=2375705</Link> <span style={{ opacity: 0.7 }}>→ <code>#m=mp-2375705</code></span></li>
+                <li><span className="try-label">Conflict</span> <Link to="/hash#m=mp-149&mp=2375705" className="example-url">#m=mp-149&mp=2375705</Link> <span style={{ opacity: 0.7 }}>→ <code>#m=mp-149</code> (canonical wins, warned)</span></li>
+              </>
+            )}
+          </ul>
+        </div>
+        <details className="code-sample">
+          <summary>Code</summary>
+          <pre>{`// Alias decoder: bare numeric id ↔ canonical 'mp-<id>'
+const mpAliasParam: Param<string | undefined> = {
+  encode: v => v ? v.slice(3) : undefined,
+  decode: v => v ? \`mp-\${v}\` : undefined,
+}
+
+const [materialId, setMaterialId] = useUrlAlias<string>({
+  keys: ['m', 'mp'] as const,  // index 0 = canonical write target
+  params: { m: stringParam(), mp: mpAliasParam },
+  merge: ({ m, mp }) => {
+    if (m && mp && m !== mp) return new Error(\`m=\${m} vs mp=\${mp}\`)
+    return m ?? mp
+  },
+})`}</pre>
+        </details>
+      </section>
+
+      {/* Flag Pack */}
+      <section id="section-flagpack" className="section" style={getSectionStyle(['_'])} onMouseEnter={activate('_')} onMouseLeave={deactivate}>
+        <h2>Flag Pack (flagPackParam)</h2>
+        <p className="section-intro">
+          Six default-on toggles collapsed into one URL key. Letters appear in the pack only when their state differs from the spec's default — flip them all on and the key disappears entirely.
+        </p>
+        <div className="controls">
+          {(['Z', 'H', 'A', 'C', 'L', 'E'] as const).map(k => (
+            <button
+              key={k}
+              className={flags[k] ? 'active' : ''}
+              onClick={() => setFlags({ ...flags, [k]: !flags[k] })}
+              onFocus={activate('_')}
+              onBlur={deactivate}
+            >
+              {k}: {flags[k] ? 'on' : 'off'}
+            </button>
+          ))}
+        </div>
+        <details className="code-sample">
+          <summary>Code</summary>
+          <pre>{`const elvisFlagsParam = flagPackParam({
+  Z: true, H: true, A: true, C: true, L: true, E: true,
+})
+const [flags, setFlags] = useUrlState('_', elvisFlagsParam)
+// flags: { Z: boolean, H: boolean, A: boolean, C: boolean, L: boolean, E: boolean }
+// ?_=ZH → { Z: false, H: false, A: true, C: true, L: true, E: true }
+// (absent) → all true`}</pre>
         </details>
       </section>
 

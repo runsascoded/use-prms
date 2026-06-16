@@ -2,6 +2,7 @@ import {
   useUrlState,
   useUrlStates,
   useMultiUrlState,
+  useUrlAlias,
   boolParam,
   stringParam,
   intParam,
@@ -13,7 +14,24 @@ import {
   codesParam,
   multiStringParam,
   multiIntParam,
+  flagPackParam,
 } from 'use-prms'
+import type { Param } from 'use-prms'
+
+const mpAliasParam: Param<string | undefined> = {
+  encode: v => v ? v.slice(3) : undefined,
+  decode: v => v ? `mp-${v}` : undefined,
+}
+
+export const elvisFlagsParam = flagPackParam({
+  Z: true,
+  H: true,
+  A: true,
+  C: true,
+  L: true,
+  E: true,
+})
+export type ElvisFlags = ReturnType<typeof elvisFlagsParam.decode>
 import {
   ParamsDemo,
   Theme, themes,
@@ -37,6 +55,15 @@ export function Home() {
     bx: intParam(0),
     by: intParam(0),
   })
+  const [materialId, setMaterialId] = useUrlAlias<string>({
+    keys: ['m', 'mp'] as const,
+    params: { m: stringParam(), mp: mpAliasParam },
+    merge: ({ m, mp }) => {
+      if (m && mp && m !== mp) return new Error(`m=${m} conflicts with mp=${mp}`)
+      return m ?? mp
+    },
+  })
+  const [flags, setFlags] = useUrlState('_', elvisFlagsParam)
 
   return (
     <ParamsDemo
@@ -53,6 +80,8 @@ export function Home() {
       multiTags={multiTags} setMultiTags={setMultiTags}
       multiIds={multiIds} setMultiIds={setMultiIds}
       batch={batch} setBatch={setBatch}
+      materialId={materialId} setMaterialId={setMaterialId}
+      flags={flags} setFlags={setFlags}
       useUrlState={useUrlState}
     />
   )

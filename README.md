@@ -481,6 +481,40 @@ setFilters(cycleTagFilter(filters, 'CE', defaults))
 
 `cycleTagFilter` accepts an optional fourth argument to override the cycle order (default `['in', 'out', 'off']`); e.g. pass `['off', 'in', 'out']` to visit `'in'` before `'out'`.
 
+## Flag Packs <a id="flag-pack"></a>
+
+`flagPackParam` collapses N boolean flags into one URL key. Each entry in the spec is `<letter>: <default>`; the encoded value lists only the letters whose current state differs from their default, in spec-declared order. So when every flag is at its default, the key is omitted entirely.
+
+```typescript
+import { flagPackParam, useUrlState } from 'use-prms'
+
+const flagsParam = flagPackParam({
+  Z: true,  // default on; presence in pack means Z=false
+  H: true,
+  A: true,
+  C: true,
+  L: true,
+  E: true,
+})
+
+const [flags, setFlags] = useUrlState('_', flagsParam)
+// initial URL `?_=ZH` → { Z: false, H: false, A: true, C: true, L: true, E: true }
+
+setFlags({ ...flags, A: false })
+// URL becomes `?_=ZHA`
+```
+
+| Flags | URL |
+| ----- | --- |
+| all defaults | *(absent)* |
+| `Z` off | `?_=Z` |
+| `Z`, `H` off | `?_=ZH` |
+| `Z` default-on flipped off + `G` default-off flipped on | `?_=ZG` |
+
+Declaration order is canonical — `?_=HZ` decodes to the same state as `?_=ZH`, but encode emits `?_=ZH`. `cleanUrl({ stale: 'normalize' })` will rewrite stale orderings, duplicates (`?_=ZZ` → `?_=Z`), and empty packs (`?_=` → absent).
+
+Decode is lenient: unknown letters are silently ignored (they fall under `inspectUrl`'s `stale`/`unrecognized` diagnostics when round-tripped against the spec), and multi-character flag tokens are matched longest-prefix first.
+
 ## URL Diagnostics <a id="diagnostics"></a>
 
 `use-prms` can report on the relationship between the URL and your declared param spec — which keys are unrecognized, which values are malformed (decoded to default), and which are stale (parsed but in non-canonical format). Reporting and cleanup are decoupled: you can observe without acting, act without observing, or both.
@@ -703,6 +737,7 @@ type MultiParam<T> = {
 | `bboxParam(opts)` | `Param<BBox>` | Bounding box (`sw`/`ne` corners) |
 | `viewStateParam(opts)` | `Param<ViewState \| null>` | deck.gl camera state; nullable default for "no override" |
 | `tagFilterParam<T>(opts?)` | `Param<Map<T, TagState>>` | Tri-state tag filter (`'in'`/`'out'`/`'off'`) with per-tag defaults; encodes overrides only |
+| `flagPackParam<S>(spec)` | `Param<{[K in keyof S]: boolean}>` | N boolean flags packed into one key (only off-from-default letters listed, in spec-declared order) |
 
 ### Built-in MultiParam Types
 
