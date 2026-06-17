@@ -873,6 +873,159 @@ function useMultiUrlStates(params, options = {}) {
   );
   return { values, setValues };
 }
+var snapshotCache2 = /* @__PURE__ */ new WeakMap();
+function getSnapshot2(strategy) {
+  const raw = strategy.getRaw();
+  const cached = snapshotCache2.get(strategy);
+  if (cached && cached.raw === raw) return cached.snapshot;
+  const snapshot = strategy.parse();
+  snapshotCache2.set(strategy, { raw, snapshot });
+  return snapshot;
+}
+function getServerSnapshot2() {
+  return {};
+}
+function handleConflict(err, mode) {
+  if (mode === "throw") throw err;
+  if (mode === "warn") {
+    console.warn(`[use-prms] useUrlAlias: ${err.message}`);
+    return;
+  }
+  mode(err);
+}
+function useUrlAlias(input) {
+  const {
+    keys,
+    params,
+    merge,
+    onConflict = "warn",
+    canonicalizeOnMount = true
+  } = input;
+  const canonicalKey = keys[0];
+  const aliasKeys = keys.slice(1);
+  const strategy = getDefaultStrategy();
+  const urlParams = react.useSyncExternalStore(
+    (cb) => strategy.subscribe(cb),
+    () => getSnapshot2(strategy),
+    getServerSnapshot2
+  );
+  const lastWrittenRef = react.useRef(null);
+  const rawValues = {};
+  const decodedValues = {};
+  for (const k of keys) {
+    const enc = urlParams[k]?.[0];
+    rawValues[k] = enc;
+    decodedValues[k] = params[k].decode(enc);
+  }
+  const canonicalEnc = rawValues[canonicalKey];
+  const aliasesAbsent = aliasKeys.every((k) => rawValues[k] === void 0);
+  let value;
+  const lastWritten = lastWrittenRef.current;
+  if (lastWritten && lastWritten.canonicalEncoded === canonicalEnc && aliasesAbsent) {
+    value = lastWritten.value;
+  } else {
+    lastWrittenRef.current = null;
+    let result;
+    try {
+      result = merge(decodedValues);
+    } catch (e) {
+      result = e instanceof Error ? e : new Error(String(e));
+    }
+    if (result instanceof Error) {
+      handleConflict(result, onConflict);
+      value = decodedValues[canonicalKey];
+    } else {
+      value = result;
+    }
+  }
+  const writeToUrl = react.useCallback(
+    (canonicalEncoded) => {
+      if (typeof window === "undefined") return;
+      const current = strategy.parse();
+      const next = { ...current };
+      if (canonicalEncoded === void 0) delete next[canonicalKey];
+      else next[canonicalKey] = [canonicalEncoded];
+      for (const k of aliasKeys) delete next[k];
+      const url = new URL(window.location.href);
+      const newUrl = strategy.buildUrl(url, next);
+      window.history.replaceState({ ...window.history.state }, "", newUrl);
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    },
+    [canonicalKey, aliasKeys.join("\0"), strategy]
+    // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  const setValue = react.useCallback(
+    (v) => {
+      const enc = params[canonicalKey].encode(v);
+      lastWrittenRef.current = { canonicalEncoded: enc, value: v };
+      writeToUrl(enc);
+    },
+    [params, canonicalKey, writeToUrl]
+  );
+  const canonicalizedRef = react.useRef(false);
+  react.useEffect(() => {
+    if (!canonicalizeOnMount || canonicalizedRef.current) return;
+    canonicalizedRef.current = true;
+    const targetEnc = params[canonicalKey].encode(value);
+    const canonicalMatches = targetEnc === canonicalEnc;
+    if (canonicalMatches && aliasesAbsent) return;
+    lastWrittenRef.current = { canonicalEncoded: targetEnc, value };
+    writeToUrl(targetEnc);
+  }, []);
+  return [value, setValue];
+}
+
+// src/flagPack.ts
+function validateSpec(spec) {
+  const seen = /* @__PURE__ */ new Set();
+  for (const letter of Object.keys(spec)) {
+    if (letter.length === 0) {
+      throw new Error("flagPackParam: flag name must be non-empty");
+    }
+    if (seen.has(letter)) {
+      throw new Error(`flagPackParam: duplicate flag ${JSON.stringify(letter)}`);
+    }
+    seen.add(letter);
+  }
+}
+function flagPackParam(spec) {
+  validateSpec(spec);
+  const orderedKeys = Object.keys(spec);
+  const known = new Set(orderedKeys);
+  const defaults = { ...spec };
+  return {
+    encode(values) {
+      const parts = [];
+      for (const key of orderedKeys) {
+        if (values[key] !== spec[key]) parts.push(key);
+      }
+      if (parts.length === 0) return void 0;
+      return parts.join("");
+    },
+    decode(encoded) {
+      const out = { ...defaults };
+      if (!encoded) return out;
+      const sortedByLen = [...orderedKeys].sort((a, b) => b.length - a.length);
+      let i = 0;
+      while (i < encoded.length) {
+        let matched = null;
+        for (const k of sortedByLen) {
+          if (encoded.startsWith(k, i)) {
+            matched = k;
+            break;
+          }
+        }
+        if (matched && known.has(matched)) {
+          out[matched] = !spec[matched];
+          i += matched.length;
+        } else {
+          i += 1;
+        }
+      }
+      return out;
+    }
+  };
+}
 
 // src/alphabet.ts
 var ALPHABETS = {
@@ -1952,6 +2105,7 @@ exports.effectiveTagState = effectiveTagState;
 exports.encodeFloatAllModes = encodeFloatAllModes;
 exports.encodePointAllModes = encodePointAllModes;
 exports.enumParam = enumParam;
+exports.flagPackParam = flagPackParam;
 exports.floatParam = floatParam;
 exports.floatToBytes = floatToBytes;
 exports.formatSignedParts = formatSignedParts;
@@ -1992,6 +2146,7 @@ exports.toFloat = toFloat;
 exports.updateUrl = updateUrl;
 exports.useMultiUrlState = useMultiUrlState;
 exports.useMultiUrlStates = useMultiUrlStates;
+exports.useUrlAlias = useUrlAlias;
 exports.useUrlState = useUrlState;
 exports.useUrlStates = useUrlStates;
 exports.validateAlphabet = validateAlphabet;

@@ -493,6 +493,128 @@ declare function useMultiUrlStates<P extends Record<string, MultiParam<any>>>(pa
 };
 
 /**
+ * `useUrlAlias`: one logical value sourced from N URL keys, with a
+ * designated *canonical* key for writes. Reads each alias key via its own
+ * `Param<T | undefined>`, hands the decoded values to a user-supplied
+ * `merge` function, and on first render rewrites the URL into canonical
+ * form (canonical key only, aliases stripped).
+ *
+ * The prototypical case is ELvis's `?m=mp-2375705` (canonical) /
+ * `?mp=2375705` (shorthand) pair: both resolve to the same internal
+ * `materialId`, and the URL should normalize to `?m=…` on mount so shared
+ * links are predictable.
+ *
+ * `merge` decides resolution. Return a value (or `undefined`) to adopt
+ * it; return (or throw) an `Error` to signal a conflict — `onConflict`
+ * controls what happens next (default: warn + adopt the canonical key's
+ * decoded value).
+ */
+
+/** Result returned by an `AliasInput<T>['merge']` callback. */
+type AliasMergeResult<T> = T | undefined | Error;
+/** Mode for handling a merge-conflict `Error`. */
+type AliasConflictMode = 'warn' | 'throw' | ((err: Error) => void);
+interface AliasInput<T> {
+    /**
+     * Ordered list of URL keys. Index 0 is the *canonical* write target;
+     * later entries are aliases (read-only).
+     */
+    keys: readonly [string, ...string[]];
+    /**
+     * Per-key decoder. Maps each entry in `keys` to a `Param<T | undefined>`
+     * so an absent key reads as `undefined`. Different aliases can use
+     * different decoders (e.g. canonical `m` decodes `'mp-2375705'`
+     * unchanged; alias `mp` decodes `'2375705'` → `'mp-2375705'`).
+     */
+    params: Record<string, Param<T | undefined>>;
+    /**
+     * Merge raw decoded values into the resolved state. Receives a record
+     * keyed by every entry in `keys` (each value is the decoded result, or
+     * `undefined` if the key is absent). Return the resolved value, or
+     * return/throw an `Error` to signal a conflict; see `onConflict`.
+     */
+    merge: (vals: Record<string, T | undefined>) => AliasMergeResult<T>;
+    /**
+     * What to do when `merge` returns/throws an `Error`.
+     * - `'warn'` *(default)*: `console.warn` the message, then adopt the
+     *   canonical key's decoded value.
+     * - `'throw'`: rethrow.
+     * - `function`: invoked with the error; afterwards we adopt the
+     *   canonical key's decoded value.
+     */
+    onConflict?: AliasConflictMode;
+    /**
+     * If `true` *(default)*, on first render strip every non-canonical
+     * alias key and re-write the canonical key from the resolved value.
+     * Set `false` to leave the URL alone (aliases are still resolved on
+     * subsequent navigations).
+     */
+    canonicalizeOnMount?: boolean;
+}
+/**
+ * React hook for managing one logical value sourced from multiple URL
+ * keys. See {@link AliasInput} for the full options shape.
+ *
+ * Returns `[value, setValue]`. `setValue` always writes to `keys[0]`
+ * (the canonical key) and strips every alias key from the URL.
+ *
+ * @example
+ * ```tsx
+ * type MatId = string
+ * const [materialId, setMaterialId] = useUrlAlias<MatId>({
+ *   keys: ['m', 'mp'] as const,
+ *   params: {
+ *     m: stringParam(),
+ *     mp: {
+ *       encode: v => v ? v.slice(3) : undefined,
+ *       decode: v => v ? `mp-${v}` : undefined,
+ *     },
+ *   },
+ *   merge: ({ m, mp }) => {
+ *     if (m && mp && m !== mp) return new Error(`m=${m} vs mp=${mp}`)
+ *     return m ?? mp
+ *   },
+ * })
+ * // `?mp=2375705` → URL becomes `?m=mp-2375705`, materialId === 'mp-2375705'
+ * ```
+ */
+declare function useUrlAlias<T>(input: AliasInput<T>): [T | undefined, (v: T | undefined) => void];
+
+/**
+ * `flagPackParam`: collapse N boolean flags into one URL key. Each entry
+ * in the spec is `<letter>: <default>`; the encoded value lists only the
+ * letters whose current state differs from their default, in spec-declared
+ * order. So `?_=` is omitted entirely when every flag is at its default.
+ *
+ * @example
+ * ```ts
+ * const flagsParam = flagPackParam({ Z: true, H: true, A: true })
+ * const [flags, setFlags] = useUrlState('_', flagsParam)
+ * // ?_=Z → { Z: false, H: true, A: true }
+ * // ?_=ZA → { Z: false, H: true, A: false }  (declaration order)
+ * // ?    → { Z: true,  H: true, A: true }    (all default)
+ * ```
+ *
+ * Decode is lenient: out-of-order tokens (`?_=AZ`), duplicates (`?_=ZZ`),
+ * and unknown letters all parse without throwing — they round-trip through
+ * `cleanUrl({ stale: 'normalize' })` to the canonical spec-declared form.
+ */
+
+/** Spec describing a flag pack: `<letter>: <default value>` map. */
+type FlagPackSpec = Record<string, boolean>;
+/** Flag-record type derived from a {@link FlagPackSpec}. */
+type FlagPackValues<S extends FlagPackSpec> = {
+    [K in keyof S]: boolean;
+};
+/**
+ * Create a {@link Param} that packs `spec`'s flags into one URL token.
+ * Encode emits the letters whose current state differs from their default,
+ * in declaration order. Decode parses the same format (lenient on order,
+ * dupes, and unknown letters).
+ */
+declare function flagPackParam<S extends FlagPackSpec>(spec: S): Param<FlagPackValues<S>>;
+
+/**
  * Base64 alphabet definitions and utilities
  *
  * Provides named presets for common base64 alphabets and validation.
@@ -1299,4 +1421,4 @@ declare function getCurrentParams(): Record<string, Encoded>;
  */
 declare function updateUrl(params: Record<string, Encoded>, push?: boolean): void;
 
-export { ALPHABETS, type Alphabet, type AlphabetName, BASE64_CHARS, type BBox, type BBoxParamOptions, type Base64Options, type BinaryParamOptions, BitBuffer, type CleanUrlPolicy, type CodeMap, DEFAULT_TAG_CYCLE, type DeprecatedInfo, type DeprecatedMigration, type DeprecatedSpec, type Encoded, type FixedPoint, type Float, type FloatEncoding, type FloatParamOptions, type InspectUrlOptions, type KeyedDiagnostic, type LLZ, type LLZParamOptions, type LocationStrategy, type MultiEncoded, type MultiParam, type NumberFieldEncoding, type NumberPath, type NumberTupleField, type NumberTupleParamOptions, precisionSchemes as PRECISION_SCHEMES, type Pagination, type Param, type ParamDiagnostic, type ParamValues, type Params, type Point, type PointParamOptions, type PrecisionScheme, type TagDefaults, type TagFilterParamOptions, type TagFilters, type TagPrefixes, type TagState, type UrlDiagnostics, type UseUrlStateOptions, type UseUrlStatesOptions, type ViewState, type ViewStateParamOptions, base64Decode, base64Encode, base64FloatParam, base64Param, bboxParam, binaryParam, boolParam, bytesToFloat, classifyParam, cleanUrl, clearParams, codeParam, codesParam, createLookupMap, cycleTagFilter, defStringParam, effectiveTagState, encodeFloatAllModes, encodePointAllModes, enumParam, floatParam, floatToBytes, formatSignedParts, fromFixedPoint, fromFloat, getCurrentParams, getDefaultStrategy, hashStrategy, inspectUrl, intParam, llzParam, multiFloatParam, multiIntParam, multiStringParam, notifyLocationChange, numberArrayParam, numberTupleParam, optFloatParam, optIntParam, paginationParam, parseMultiParams, parseParams, parseSignedParts, pointParam, precisionSchemes, queryStrategy, resolveAlphabet, resolvePrecision, runPassesTagFilters, serializeMultiParams, serializeParams, setDefaultStrategy, stringParam, stringsParam, tagFilterParam, toFixedPoint, toFloat, updateUrl, useMultiUrlState, useMultiUrlStates, useUrlState, useUrlStates, validateAlphabet, viewStateParam };
+export { ALPHABETS, type AliasConflictMode, type AliasInput, type AliasMergeResult, type Alphabet, type AlphabetName, BASE64_CHARS, type BBox, type BBoxParamOptions, type Base64Options, type BinaryParamOptions, BitBuffer, type CleanUrlPolicy, type CodeMap, DEFAULT_TAG_CYCLE, type DeprecatedInfo, type DeprecatedMigration, type DeprecatedSpec, type Encoded, type FixedPoint, type FlagPackSpec, type FlagPackValues, type Float, type FloatEncoding, type FloatParamOptions, type InspectUrlOptions, type KeyedDiagnostic, type LLZ, type LLZParamOptions, type LocationStrategy, type MultiEncoded, type MultiParam, type NumberFieldEncoding, type NumberPath, type NumberTupleField, type NumberTupleParamOptions, precisionSchemes as PRECISION_SCHEMES, type Pagination, type Param, type ParamDiagnostic, type ParamValues, type Params, type Point, type PointParamOptions, type PrecisionScheme, type TagDefaults, type TagFilterParamOptions, type TagFilters, type TagPrefixes, type TagState, type UrlDiagnostics, type UseUrlStateOptions, type UseUrlStatesOptions, type ViewState, type ViewStateParamOptions, base64Decode, base64Encode, base64FloatParam, base64Param, bboxParam, binaryParam, boolParam, bytesToFloat, classifyParam, cleanUrl, clearParams, codeParam, codesParam, createLookupMap, cycleTagFilter, defStringParam, effectiveTagState, encodeFloatAllModes, encodePointAllModes, enumParam, flagPackParam, floatParam, floatToBytes, formatSignedParts, fromFixedPoint, fromFloat, getCurrentParams, getDefaultStrategy, hashStrategy, inspectUrl, intParam, llzParam, multiFloatParam, multiIntParam, multiStringParam, notifyLocationChange, numberArrayParam, numberTupleParam, optFloatParam, optIntParam, paginationParam, parseMultiParams, parseParams, parseSignedParts, pointParam, precisionSchemes, queryStrategy, resolveAlphabet, resolvePrecision, runPassesTagFilters, serializeMultiParams, serializeParams, setDefaultStrategy, stringParam, stringsParam, tagFilterParam, toFixedPoint, toFloat, updateUrl, useMultiUrlState, useMultiUrlStates, useUrlAlias, useUrlState, useUrlStates, validateAlphabet, viewStateParam };
