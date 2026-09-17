@@ -1,5 +1,40 @@
 # Param reflection: a page can explain its own URL
 
+## Implementation notes (landed 2026-09-17)
+
+Shipped as `src/registry.ts` (pure) + `src/reflection.ts` (pure + the one
+React hook) + `describe` instrumentation on the five hooks, exported from the
+package root; a "URL reflection" panel in `site/`; 13 tests in
+`src/reflection.test.tsx`. Deltas from the spec as written:
+
+- **Registry key & conflict policy.** Live entries are keyed `(strategy, key)`
+  and ref-counted. When one key is mounted by several components the **first**
+  registration's `param`/metadata is kept (a stable identity); later mounts
+  only bump `refs`. No equality policing — a caller reading one key with
+  divergent params is their bug.
+- **`describeParams` merge.** A catalogue entry (`refs: 0`) merges *under* a
+  live registration of the same key: the live entry wins, the catalogue fills
+  metadata the hook omitted. A catalogue entry may carry its own `param` so a
+  dormant row still classifies; without one it uses a passthrough decoder.
+- **`describe` shape.** Single-key hooks (`useUrlState`, `useMultiUrlState`,
+  `useUrlAlias`) take one `describe`; the multi-key `useUrlStates` takes a
+  per-key `describe?: Partial<Record<keyof P, ParamDescribe>>`.
+  `useMultiUrlStates` registers its keys but takes no `describe` (its options
+  type is the single-key shape).
+- **`description` type.** Typed `unknown` in the pure layer (a host may pass a
+  string or a ReactNode) to keep `registry.ts`/`reflection.ts` free of React
+  types.
+- **Multi-value reflection.** `raw` is the comma-joined encoding and `value`
+  the decoded array; `state` is `absent`/`canonical` only (the
+  single-value `classifyParam` stale/malformed split doesn't apply).
+- **`ParamReflection extends ParamRegistration`**, as the spec's type test asks.
+- `__resetRegistry()` is exported for tests.
+
+Everything else matches the sections below.
+
+---
+
+
 **Why.** A `use-prms` page's URL is its state, but nothing on the page can say what `?d=260916-2001-1d&ln&y0#over-time` means, which keys the page would honour that aren't set, or why a stale link no longer does what it did. Today that knowledge lives in the hook call sites, one `useUrlState('ln', boolParam)` at a time, and the URL Diagnostics helpers (`inspectUrl`, `classifyParam`) need the caller to hand them the spec. This spec makes the registered params discoverable at runtime so a host can render them however it likes — a SpeedDial panel, a `?` modal, a dev overlay, a docs page — without the library dictating UI.
 
 ## 1. Registry
