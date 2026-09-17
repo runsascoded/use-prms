@@ -21,6 +21,7 @@ Type-safe URL-parameter (query and hash) management with minimal, human-readable
 - [Flag Packs](#flag-pack)
 - [Date Sets](#dates)
 - [URL Diagnostics](#diagnostics)
+- [URL Reflection](#reflection)
 - [Framework-Agnostic Core](#core)
 - [Hash Params](#hash)
 - [API Reference](#api)
@@ -669,6 +670,33 @@ useEffect(() => {
 Surgical (only the named keys are touched, third-party params survive), independent of `unrecognized`, and both the strip and the migration land in one `replaceState`. `inspectUrl` mirrors this: `inspectUrl(params, { deprecated: [...] })` returns a `deprecated: string[]` field reporting which listed keys are actually in the URL.
 
 Migration callbacks are type-checked against the declared `params`: keys must be declared, and values must match each param's `T`. A typo (`{ ll: ... }` instead of `{ llz: ... }`) or wrong value shape is caught at compile time, not at runtime.
+
+## URL Reflection <a id="reflection"></a>
+
+A running app can enumerate the params it has mounted and how the live URL maps onto them — so a host can render a "what does this URL mean?" panel, a `?`-key overlay, or a dev inspector, without the library dictating any UI.
+
+Every `useUrlState` / `useUrlStates` / `useMultiUrlState` / `useUrlAlias` registers its key on mount (ref-counted) and unregisters on unmount. A new `describe?` option attaches human copy:
+
+```typescript
+const [count, setCount] = useUrlState('c', intParam(0), {
+  describe: { label: 'Count', description: 'Items per page', examples: ['5', '20'] },
+})
+```
+
+Read the registry against the current URL with the pure helpers, or the React hook:
+
+```typescript
+import { reflectParams, reflectUnknown, useParamReflection } from 'use-prms'
+
+// Pure — framework-agnostic
+reflectParams()   // → [{ key, label, value, state, raw, canonical, refs, defaultEncoded, ... }]
+reflectUnknown()  // → [{ key, raw }]  (URL keys nothing registered)
+
+// React — re-renders on hook mount/unmount and on URL navigation
+const { params, unknown } = useParamReflection()
+```
+
+Each `ParamReflection` carries the param's live classification (`absent` / `canonical` / `stale` / `malformed`, the same axis as `classifyParam`), its decoded `value`, the `raw` URL value and the `canonical` form it would normalize to. For a whole-app catalogue of keys — including ones not currently mounted (they reflect with `refs: 0`) — register metadata once with `describeParams({ c: { label: 'Count', param: intParam(0) } })`; a live hook of the same key merges over it (the hook wins, the catalogue fills gaps). See the [demo](https://use-prms.runsascoded.com/#section-reflection) for a panel built entirely from this API.
 
 ## Framework-Agnostic Core <a id="core"></a>
 
