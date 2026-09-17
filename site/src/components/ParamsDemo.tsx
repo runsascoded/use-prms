@@ -1,8 +1,19 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useLocation, Link } from 'react-router-dom'
 import { FaGithub, FaTimes } from 'react-icons/fa'
 import Tooltip from '@mui/material/Tooltip'
-import { clearParams, intParam, type useUrlState } from 'use-prms'
+import {
+  clearParams,
+  cleanUrl,
+  intParam,
+  describeParams,
+  useParamReflection,
+  queryStrategy,
+  hashStrategy,
+  type Param,
+  type ParamReflection,
+  type useUrlState,
+} from 'use-prms'
 import { FloatDemo } from './FloatDemo'
 import { MapDemo } from './MapDemo'
 
@@ -269,6 +280,11 @@ export function ParamsDemo({
     clearParams(mode)
   }
 
+  // Register human copy for the reflection panel below (a `describeParams`
+  // catalogue, keyed to this page's strategy). Merges under the live hooks
+  // Home/HashDemo mounted. Disposed on unmount / mode change.
+  useEffect(() => describeParams(PARAM_DOCS, { strategy: mode }), [mode])
+
   // Get background color for a section based on its param keys
   const getSectionStyle = (keys: string[]) => {
     const isActive = keys.some(k => combinedActiveKeys.includes(k))
@@ -364,6 +380,8 @@ export function ParamsDemo({
       </div>
 
       <UrlDisplay search={search} activeKeys={combinedActiveKeys} onReset={handleReset} mode={mode} onHoverKey={setUrlHoverKeys} />
+
+      <ReflectionPanel mode={mode} onHoverKey={setUrlHoverKeys} />
 
       {/* Boolean */}
       <section id="section-boolean" className="section" style={getSectionStyle(['e'])} onMouseEnter={activate('e')} onMouseLeave={deactivate}>
@@ -883,6 +901,113 @@ function DebounceSection({ useUrlState }: { useUrlState: ParamValues['useUrlStat
         <summary>Code</summary>
         <pre>{`const [num, setNum] = useUrlState('d', intParam(0), { debounce: 500 })`}</pre>
       </details>
+    </section>
+  )
+}
+
+/**
+ * Human copy for the reflection panel. A `describeParams` catalogue keyed
+ * by URL key — merged under the live hooks Home/HashDemo mount, so each
+ * row shows a label + description alongside its live classification.
+ */
+const PARAM_DOCS: Record<string, { label: string; description: string }> = {
+  e: { label: 'Enabled', description: 'Boolean flag; present-and-valueless means true.' },
+  n: { label: 'Name', description: 'Free-text string.' },
+  c: { label: 'Count', description: 'Integer, omitted at its default of 0.' },
+  r: { label: 'Ratio', description: 'Float, omitted at its default of 1.0.' },
+  t: { label: 'Theme', description: 'Enum: light | dark | auto.' },
+  tags: { label: 'Tags', description: 'Space-separated string list.' },
+  p: { label: 'Pagination', description: 'Offset + page size, packed on one key.' },
+  y: { label: 'Metric', description: 'Single value via short code.' },
+  rg: { label: 'Regions', description: 'Multi-select via short codes.' },
+  tag: { label: 'Multi tags', description: 'Repeated key: ?tag=a&tag=b.' },
+  id: { label: 'Multi ids', description: 'Repeated key of integers.' },
+  bx: { label: 'Batch x', description: 'Batched with by into one history entry.' },
+  by: { label: 'Batch y', description: 'Batched with bx into one history entry.' },
+  m: { label: 'Material id', description: 'Alias: canonical m, shorthand mp → one value.' },
+  _: { label: 'Flag pack', description: 'N booleans packed into one key.' },
+  dates: { label: 'Date set', description: 'ISO dates contracted to runs; a week → 9 chars.' },
+}
+
+function formatValue(value: unknown): string {
+  if (value === undefined) return 'undefined'
+  if (Array.isArray(value)) return `[${value.map(formatValue).join(', ')}]`
+  if (value instanceof Map) return `{${[...value].map(([k, v]) => `${k}: ${formatValue(v)}`).join(', ')}}`
+  if (typeof value === 'object' && value !== null) return JSON.stringify(value)
+  return String(value)
+}
+
+/**
+ * A panel that reflects the page's own URL: one row per registered param
+ * (label, key, live value or muted default, description) plus a
+ * "normalize" affordance for stale rows and a trailing "not recognized"
+ * group. Reads the registry via `useParamReflection` — the library ships
+ * no such component; this is a host rendering one however it likes.
+ */
+function ReflectionPanel({ mode, onHoverKey }: {
+  mode: 'query' | 'hash'
+  onHoverKey: (keys: string[] | null) => void
+}) {
+  const { params, unknown } = useParamReflection({ strategy: mode })
+  const strategy = mode === 'hash' ? hashStrategy : queryStrategy
+  const sorted = [...params].sort((a, b) => a.key.localeCompare(b.key))
+
+  const normalize = (row: ParamReflection) => {
+    cleanUrl({ [row.key]: row.param as Param<unknown> }, { stale: 'normalize' }, strategy)
+  }
+
+  return (
+    <section id="section-reflection" className="section">
+      <h2>URL reflection (useParamReflection)</h2>
+      <p className="section-intro">
+        The page reading its own URL back: every param it has mounted, what the
+        current URL decodes to, and whether that value is canonical, stale, or
+        malformed. Built entirely from the public reflection API.
+      </p>
+      <table className="reflection-table">
+        <thead>
+          <tr><th>Param</th><th>Key</th><th>Value</th><th>State</th><th></th></tr>
+        </thead>
+        <tbody>
+          {sorted.map(row => (
+            <tr
+              key={`${row.strategy}:${row.key}`}
+              onMouseEnter={() => onHoverKey(row.keys)}
+              onMouseLeave={() => onHoverKey(null)}
+            >
+              <td>
+                <span className="reflection-label">{row.label ?? row.key}</span>
+                {typeof row.description === 'string' && (
+                  <span className="reflection-desc">{row.description}</span>
+                )}
+              </td>
+              <td><code>{row.liveKey ?? row.key}</code></td>
+              <td className={row.state === 'absent' ? 'reflection-default' : ''}>
+                {formatValue(row.value)}
+                {row.state === 'absent' && <span className="reflection-tag"> default</span>}
+              </td>
+              <td>
+                <span className={`reflection-state reflection-state-${row.state}`}>{row.state}</span>
+              </td>
+              <td>
+                {row.state === 'stale' && (
+                  <button className="reflection-normalize" onClick={() => normalize(row)}>
+                    normalize → <code>{row.canonical}</code>
+                  </button>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {unknown.length > 0 && (
+        <div className="reflection-unknown">
+          <strong>Not recognized:</strong>{' '}
+          {unknown.map((u, i) => (
+            <span key={u.key}>{i > 0 ? ' ' : ''}<code>{u.key}={u.raw}</code></span>
+          ))}
+        </div>
+      )}
     </section>
   )
 }
