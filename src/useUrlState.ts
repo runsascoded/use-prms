@@ -6,6 +6,7 @@ import { useCallback, useEffect, useReducer, useRef, useSyncExternalStore } from
 import type { Param } from './index.js'
 import type { LocationStrategy, MultiEncoded } from './core.js'
 import { getDefaultStrategy } from './core.js'
+import { registerParam, strategyName, type ParamDescribe } from './registry.js'
 import type { MultiParam } from './multiParams.js'
 import {
   classifyParam,
@@ -41,13 +42,20 @@ export interface UseUrlStateOptions {
    * tying that to cleanup.
    */
   onDiagnostic?: (diag: ParamDiagnostic) => void
+
+  /**
+   * Human copy attached to this param in the reflection registry
+   * (`reflectParams` / `useParamReflection`). Purely descriptive — it
+   * doesn't affect encoding.
+   */
+  describe?: ParamDescribe
 }
 
 /**
  * Options for `useUrlStates` (multi-key) — extends single-key options with
  * URL-level reporting and cleanup.
  */
-export interface UseUrlStatesOptions<P extends Params = Params> extends Omit<UseUrlStateOptions, 'onDiagnostic'> {
+export interface UseUrlStatesOptions<P extends Params = Params> extends Omit<UseUrlStateOptions, 'onDiagnostic' | 'describe'> {
   /**
    * Fired with a `UrlDiagnostics` whenever the URL changes. Reports
    * unrecognized keys, malformed values, and stale-format values.
@@ -60,6 +68,12 @@ export interface UseUrlStatesOptions<P extends Params = Params> extends Omit<Use
    * observing, or both.
    */
   cleanOnMount?: CleanUrlPolicy<P>
+
+  /**
+   * Per-key human copy for the reflection registry. Keys not listed still
+   * register (label falls back to the key).
+   */
+  describe?: Partial<Record<keyof P, ParamDescribe>>
 }
 
 /**
@@ -122,6 +136,45 @@ function getServerSnapshot(): Record<string, MultiEncoded> {
   return {}
 }
 
+/** One param's contribution to the reflection registry. */
+interface RegSpec {
+  key: string
+  keys?: string[]
+  param: Param<any> | MultiParam<any>
+  multi?: boolean
+  describe?: ParamDescribe
+  aliasParams?: Record<string, Param<any>>
+}
+
+/**
+ * Register `specs` with the reflection registry for the calling
+ * component's lifetime. `param`/metadata are snapshotted from the latest
+ * render via a ref, so registration re-runs only when the key set or
+ * strategy changes (not when a factory param gets a fresh identity each
+ * render).
+ */
+function useParamRegistrations(strategy: LocationStrategy, specs: RegSpec[]): void {
+  const sName = strategyName(strategy)
+  const specsRef = useRef(specs)
+  specsRef.current = specs
+  const sig = specs.map(s => s.key).join('\0')
+  useEffect(() => {
+    const disposers = specsRef.current.map(s => registerParam({
+      key: s.key,
+      keys: s.keys,
+      strategy: sName,
+      param: s.param as Param<unknown>,
+      aliasParams: s.aliasParams as Record<string, Param<unknown>> | undefined,
+      multi: s.multi,
+      label: s.describe?.label,
+      description: s.describe?.description,
+      examples: s.describe?.examples,
+    }))
+    return () => { for (const d of disposers) d() }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sName, sig])
+}
+
 /**
  * Convert single-value Encoded to multi-value MultiEncoded
  */
@@ -176,6 +229,9 @@ export function useUrlState<T>(
   // Use ref to avoid recreating setValue when param changes
   const paramRef = useRef(param)
   paramRef.current = param
+
+  // Advertise this param to the reflection registry
+  useParamRegistrations(strategy, [{ key, param, describe: opts.describe }])
 
   // Force re-render trigger for debounce (setValue sets pendingRef but needs a re-render)
   const [, forceUpdate] = useReducer((c: number) => c + 1, 0)
@@ -364,6 +420,12 @@ export function useUrlStates<P extends Record<string, Param<any>>>(
   const { debounce: debounceMs = 0, push = false, onDiagnostics, cleanOnMount } = opts
 
   const strategy = getDefaultStrategy()
+
+  // Advertise every declared param to the reflection registry
+  useParamRegistrations(
+    strategy,
+    Object.entries(params).map(([key, param]) => ({ key, param, describe: opts.describe?.[key] })),
+  )
 
   // Force re-render trigger for debounce
   const [, forceUpdate] = useReducer((c: number) => c + 1, 0)
@@ -570,6 +632,9 @@ export function useMultiUrlState<T>(
   const paramRef = useRef(param)
   paramRef.current = param
 
+  // Advertise this multi-value param to the reflection registry
+  useParamRegistrations(strategy, [{ key, param, multi: true, describe: opts.describe }])
+
   const [, forceUpdate] = useReducer((c: number) => c + 1, 0)
 
   const lastWrittenRef = useRef<{
@@ -712,6 +777,12 @@ export function useMultiUrlStates<P extends Record<string, MultiParam<any>>>(
   const { debounce: debounceMs = 0, push = false } = opts
 
   const strategy = getDefaultStrategy()
+
+  // Advertise every declared multi-value param to the reflection registry
+  useParamRegistrations(
+    strategy,
+    Object.keys(params).map(key => ({ key, param: params[key], multi: true })),
+  )
 
   const [, forceUpdate] = useReducer((c: number) => c + 1, 0)
 

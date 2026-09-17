@@ -20,6 +20,7 @@ import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react'
 import type { Param } from './index.js'
 import type { LocationStrategy, MultiEncoded } from './core.js'
 import { getDefaultStrategy } from './core.js'
+import { registerParam, strategyName, type ParamDescribe } from './registry.js'
 
 /** Result returned by an `AliasInput<T>['merge']` callback. */
 export type AliasMergeResult<T> = T | undefined | Error
@@ -63,6 +64,11 @@ export interface AliasInput<T> {
    * subsequent navigations).
    */
   canonicalizeOnMount?: boolean
+  /**
+   * Human copy for the reflection registry. The alias registers as one
+   * entry keyed by the canonical key, claiming every key in `keys`.
+   */
+  describe?: ParamDescribe
 }
 
 const snapshotCache = new WeakMap<LocationStrategy, {
@@ -133,6 +139,27 @@ export function useUrlAlias<T>(
   const canonicalKey = keys[0]
   const aliasKeys = keys.slice(1)
   const strategy = getDefaultStrategy()
+
+  // Advertise the alias to the reflection registry as one entry claiming
+  // every key, keyed by the canonical key. Snapshot params/describe via a
+  // ref so registration re-runs only when the key set or strategy changes.
+  const sName = strategyName(strategy)
+  const regRef = useRef({ params, describe: input.describe })
+  regRef.current = { params, describe: input.describe }
+  const keysSig = keys.join('\0')
+  useEffect(() => {
+    return registerParam({
+      key: canonicalKey,
+      keys: [...keys],
+      strategy: sName,
+      param: regRef.current.params[canonicalKey] as Param<unknown>,
+      aliasParams: regRef.current.params as Record<string, Param<unknown>>,
+      label: regRef.current.describe?.label,
+      description: regRef.current.describe?.description,
+      examples: regRef.current.describe?.examples,
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sName, canonicalKey, keysSig])
 
   const urlParams = useSyncExternalStore(
     (cb) => strategy.subscribe(cb),
