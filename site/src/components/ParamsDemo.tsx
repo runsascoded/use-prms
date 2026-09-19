@@ -6,6 +6,7 @@ import {
   clearParams,
   cleanUrl,
   intParam,
+  datesParam,
   describeParams,
   useParamReflection,
   queryStrategy,
@@ -76,6 +77,8 @@ const paramKeyColors: Record<string, number> = {
   mp: 10,    // material id (alias shorthand)
   _: 1,      // flag pack (reuse pink — string-ish)
   dates: 11, // date set (datesParam)
+  dl: 11,    // half-open date window (datesParam w/ latest/genesis)
+  d: 0,      // debounced int
 }
 
 // Keys that should highlight together (same section)
@@ -111,6 +114,8 @@ const paramKeySections: Record<string, string> = {
   mp: 'section-alias',
   _: 'section-flagpack',
   dates: 'section-dates',
+  dl: 'section-dates',
+  d: 'section-debounce',
 }
 
 // Expand a set of active keys to include all keys in the same group
@@ -785,7 +790,7 @@ const [flags, setFlags] = useUrlState('_', elvisFlagsParam)
       </section>
 
       {/* Date Set */}
-      <DatesSection dates={dates} setDates={setDates} onActivate={activate('dates')} onDeactivate={deactivate} mode={mode} />
+      <DatesSection dates={dates} setDates={setDates} onActivate={activate('dates')} onDeactivate={deactivate} mode={mode} useUrlState={useUrlState} />
 
       {/* Debounce */}
       <DebounceSection useUrlState={useUrlState} />
@@ -807,24 +812,51 @@ const [flags, setFlags] = useUrlState('_', elvisFlagsParam)
   )
 }
 
+// Half-open dates demo: a fixed genesis + a `latest` that resolves to "now".
+const HALF_OPEN_GENESIS = '2026-09-01'
+const todayIso = () => new Date().toISOString().slice(0, 10)
+function shiftDays(iso: string, delta: number): string {
+  const d = new Date(iso + 'T00:00:00Z')
+  d.setUTCDate(d.getUTCDate() + delta)
+  return d.toISOString().slice(0, 10)
+}
+// Inclusive ISO-date range; lexicographic compare is valid for YYYY-MM-DD.
+function isoRange(start: string, end: string): string[] {
+  const out: string[] = []
+  for (let d = start; d <= end; d = shiftDays(d, 1)) out.push(d)
+  return out
+}
+
 function DatesSection({
   dates,
   setDates,
   onActivate,
   onDeactivate,
   mode,
+  useUrlState,
 }: {
   dates: string[]
   setDates: (v: string[]) => void
   onActivate: () => void
   onDeactivate: () => void
   mode: 'query' | 'hash'
+  useUrlState: ParamValues['useUrlState']
 }) {
   const prefix = mode === 'hash' ? '/hash#' : '/?'
   // Fixed anchor week so the presets are stable regardless of when someone loads the page
   const week = ['2026-08-18', '2026-08-19', '2026-08-20', '2026-08-21', '2026-08-22', '2026-08-23', '2026-08-24']
   const scatter = ['2026-07-31', '2026-08-05', '2026-08-24', '2026-08-25']
   const yearBoundary = ['2025-12-29', '2025-12-30', '2025-12-31', '2026-01-01']
+
+  // Half-open window: end omitted when it reaches `latest` (today), start
+  // omitted when it reaches `genesis`. Both anchors re-resolve on decode.
+  const winParam = useMemo(() => datesParam({ latest: todayIso, genesis: HALF_OPEN_GENESIS }), [])
+  const [win, setWin] = useUrlState('dl', winParam)
+  const winEncoded = winParam.encode(win)
+  const winLast7 = useMemo(() => isoRange(shiftDays(todayIso(), -6), todayIso()), [])
+  const winGenesis = useMemo(() => isoRange(HALF_OPEN_GENESIS, shiftDays(HALF_OPEN_GENESIS, 4)), [])
+  const exLatest = winParam.encode(winLast7)
+  const exGenesis = winParam.encode(winGenesis)
 
   return (
     <section id="section-dates" className="section" style={{ backgroundColor: dates.length ? 'transparent' : undefined }} onMouseEnter={onActivate} onMouseLeave={onDeactivate}>
@@ -854,6 +886,39 @@ function DatesSection({
           <li><Link to={`${prefix}dates=251229-260101`} className="example-url">?dates=251229-260101</Link> <span style={{ opacity: 0.7 }}>→ run across a year boundary</span></li>
         </ul>
       </div>
+
+      <div className="half-open-demo" style={{ marginTop: '1rem', paddingTop: '0.75rem', borderTop: '1px dashed var(--border)' }}>
+        <h3 style={{ margin: '0 0 0.25rem' }}>Half-open ranges (latest / genesis)</h3>
+        <p className="section-intro" style={{ marginTop: 0 }}>
+          Configure the param with a <code>latest</code> anchor (here: today) and a fixed{' '}
+          <code>genesis</code> (<code>{HALF_OPEN_GENESIS}</code>). A run that reaches <code>latest</code>{' '}
+          drops its end (<code>dl={exLatest}</code>); one that starts at <code>genesis</code> drops its
+          start (<code>dl={exGenesis}</code>). The open side re-resolves on every decode, so{' '}
+          <code>D-</code> means "through today" whenever the link is opened.
+        </p>
+        <div className="controls">
+          <button onClick={() => setWin(winLast7)}>Last 7 days → today</button>
+          <button onClick={() => setWin(winGenesis)}>From genesis → +4d</button>
+          <button onClick={() => setWin([])}>Clear</button>
+        </div>
+        <div className="controls" style={{ marginTop: '0.5rem' }}>
+          <div style={{ fontSize: '0.85rem', opacity: 0.85 }}>
+            URL:{' '}
+            <code>{winEncoded ? `${mode === 'hash' ? '#' : '?'}dl=${winEncoded}` : '(absent)'}</code>
+            {' · '}<strong>{win.length}</strong> date{win.length === 1 ? '' : 's'}
+            {win.length > 0 && <>: <code>{win[0]}…{win[win.length - 1]}</code></>}
+          </div>
+        </div>
+        <details className="code-sample">
+          <summary>Code</summary>
+          <pre>{`const today = () => new Date().toISOString().slice(0, 10)
+const [win, setWin] = useUrlState('dl', datesParam({
+  latest: today,             // a run ending today → 'start-'
+  genesis: '${HALF_OPEN_GENESIS}',    // a run starting here → '-end'
+}))`}</pre>
+        </details>
+      </div>
+
       <details className="code-sample">
         <summary>Code</summary>
         <pre>{`import { datesParam, useUrlState } from 'use-prms'
@@ -927,6 +992,12 @@ const PARAM_DOCS: Record<string, { label: string; description: string }> = {
   m: { label: 'Material id', description: 'Alias: canonical m, shorthand mp → one value.' },
   _: { label: 'Flag pack', description: 'N booleans packed into one key.' },
   dates: { label: 'Date set', description: 'ISO dates contracted to runs; a week → 9 chars.' },
+  dl: { label: 'Date window', description: 'Half-open date set: end omitted when it reaches "latest".' },
+  d: { label: 'Debounced', description: 'Integer; URL writes trail the input by 500ms.' },
+  f: { label: 'Approx float', description: 'Lossy float — base10-truncated or base64 binary.' },
+  v: { label: 'Binary float', description: 'Full 64-bit float in 11 base64 chars.' },
+  xy: { label: 'Point', description: 'An (x, y) pair sharing exponent bits.' },
+  ll: { label: 'Map view', description: 'lat / lng / zoom packed on one key.' },
 }
 
 function formatValue(value: unknown): string {
