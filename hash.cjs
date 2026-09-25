@@ -309,6 +309,107 @@ function arraysEqual(a, b) {
   return a.length === b.length && a.every((v, i) => v === b[i]);
 }
 
+// src/registry.ts
+function strategyName(strategy) {
+  return strategy === hashStrategy ? "hash" : "query";
+}
+var live = /* @__PURE__ */ new Map();
+var catalogue = /* @__PURE__ */ new Map();
+var listeners = /* @__PURE__ */ new Set();
+var idOf = (strategy, key) => `${strategy}::${key}`;
+function notify() {
+  for (const cb of listeners) cb();
+}
+function onRegistryChange(cb) {
+  listeners.add(cb);
+  return () => {
+    listeners.delete(cb);
+  };
+}
+function defaultEncodedOf(input) {
+  if (input.multi) return void 0;
+  try {
+    return input.param.encode(input.param.decode(void 0));
+  } catch {
+    return void 0;
+  }
+}
+function registerParam(input) {
+  const id = idOf(input.strategy, input.key);
+  const existing = live.get(id);
+  if (existing) {
+    existing.refs += 1;
+  } else {
+    live.set(id, {
+      key: input.key,
+      keys: input.keys ?? [input.key],
+      strategy: input.strategy,
+      param: input.param,
+      aliasParams: input.aliasParams,
+      multi: input.multi ?? false,
+      label: input.label,
+      description: input.description,
+      examples: input.examples,
+      defaultEncoded: defaultEncodedOf(input),
+      refs: 1
+    });
+  }
+  notify();
+  let disposed = false;
+  return () => {
+    if (disposed) return;
+    disposed = true;
+    const entry = live.get(id);
+    if (!entry) return;
+    entry.refs -= 1;
+    if (entry.refs <= 0) live.delete(id);
+    notify();
+  };
+}
+function describeParams(entries, opts = {}) {
+  const strategy = opts.strategy ?? "query";
+  const ids = [];
+  for (const [key, meta] of Object.entries(entries)) {
+    const id = idOf(strategy, key);
+    const param = meta.param ?? passthroughParam;
+    catalogue.set(id, {
+      key,
+      keys: [key],
+      strategy,
+      param,
+      multi: meta.multi ?? false,
+      label: meta.label,
+      description: meta.description,
+      examples: meta.examples,
+      defaultEncoded: meta.param ? defaultEncodedOf({ key, strategy, param, multi: meta.multi }) : void 0,
+      refs: 0
+    });
+    ids.push(id);
+  }
+  notify();
+  return () => {
+    for (const id of ids) catalogue.delete(id);
+    notify();
+  };
+}
+var passthroughParam = {
+  encode: (v) => v === void 0 || v === null ? void 0 : String(v),
+  decode: (e) => e
+};
+function liveRegistrations(strategy) {
+  const all = [...live.values()];
+  return strategy ? all.filter((e) => e.strategy === strategy) : all;
+}
+function catalogueRegistrations(strategy) {
+  const all = [...catalogue.values()];
+  return strategy ? all.filter((e) => e.strategy === strategy) : all;
+}
+function __resetRegistry() {
+  live.clear();
+  catalogue.clear();
+  notify();
+}
+
 // src/diagnostics.ts
 function deprecatedKeysOf(spec) {
   if (!spec) return [];
@@ -441,6 +542,28 @@ function getSnapshot(strategy) {
 function getServerSnapshot() {
   return {};
 }
+function useParamRegistrations(strategy, specs) {
+  const sName = strategyName(strategy);
+  const specsRef = react.useRef(specs);
+  specsRef.current = specs;
+  const sig = specs.map((s) => s.key).join("\0");
+  react.useEffect(() => {
+    const disposers = specsRef.current.map((s) => registerParam({
+      key: s.key,
+      keys: s.keys,
+      strategy: sName,
+      param: s.param,
+      aliasParams: s.aliasParams,
+      multi: s.multi,
+      label: s.describe?.label,
+      description: s.describe?.description,
+      examples: s.describe?.examples
+    }));
+    return () => {
+      for (const d of disposers) d();
+    };
+  }, [sName, sig]);
+}
 function multiToSingle(multi) {
   if (multi.length === 0) return void 0;
   return multi[0];
@@ -451,6 +574,7 @@ function useUrlState(key, param, options = {}) {
   const strategy = getDefaultStrategy();
   const paramRef = react.useRef(param);
   paramRef.current = param;
+  useParamRegistrations(strategy, [{ key, param, describe: opts.describe }]);
   const [, forceUpdate] = react.useReducer((c) => c + 1, 0);
   const lastWrittenRef = react.useRef(null);
   const pendingRef = react.useRef(null);
@@ -547,6 +671,10 @@ function useUrlStates(params, options = {}) {
   const opts = typeof options === "boolean" ? { push: options } : options;
   const { debounce: debounceMs = 0, push = false, onDiagnostics, cleanOnMount } = opts;
   const strategy = getDefaultStrategy();
+  useParamRegistrations(
+    strategy,
+    Object.entries(params).map(([key, param]) => ({ key, param, describe: opts.describe?.[key] }))
+  );
   const [, forceUpdate] = react.useReducer((c) => c + 1, 0);
   const lastWrittenRef = react.useRef({});
   const pendingRef = react.useRef(null);
@@ -678,6 +806,7 @@ function useMultiUrlState(key, param, options = {}) {
   const strategy = getDefaultStrategy();
   const paramRef = react.useRef(param);
   paramRef.current = param;
+  useParamRegistrations(strategy, [{ key, param, multi: true, describe: opts.describe }]);
   const [, forceUpdate] = react.useReducer((c) => c + 1, 0);
   const lastWrittenRef = react.useRef(null);
   const pendingRef = react.useRef(null);
@@ -761,6 +890,10 @@ function useMultiUrlStates(params, options = {}) {
   const opts = typeof options === "boolean" ? { push: options } : options;
   const { debounce: debounceMs = 0, push = false } = opts;
   const strategy = getDefaultStrategy();
+  useParamRegistrations(
+    strategy,
+    Object.keys(params).map((key) => ({ key, param: params[key], multi: true }))
+  );
   const [, forceUpdate] = react.useReducer((c) => c + 1, 0);
   const lastWrittenRef = react.useRef({});
   const pendingRef = react.useRef(null);
@@ -904,6 +1037,22 @@ function useUrlAlias(input) {
   const canonicalKey = keys[0];
   const aliasKeys = keys.slice(1);
   const strategy = getDefaultStrategy();
+  const sName = strategyName(strategy);
+  const regRef = react.useRef({ params, describe: input.describe });
+  regRef.current = { params, describe: input.describe };
+  const keysSig = keys.join("\0");
+  react.useEffect(() => {
+    return registerParam({
+      key: canonicalKey,
+      keys: [...keys],
+      strategy: sName,
+      param: regRef.current.params[canonicalKey],
+      aliasParams: regRef.current.params,
+      label: regRef.current.describe?.label,
+      description: regRef.current.describe?.description,
+      examples: regRef.current.describe?.examples
+    });
+  }, [sName, canonicalKey, keysSig]);
   const urlParams = react.useSyncExternalStore(
     (cb) => strategy.subscribe(cb),
     () => getSnapshot2(strategy),
@@ -2149,6 +2298,97 @@ function tagFilterParam(options = {}) {
     }
   };
 }
+function resolveStrategy(opts) {
+  return opts.strategy ?? strategyName(getDefaultStrategy());
+}
+function parseFor(strategy) {
+  return (strategy === "hash" ? hashStrategy : queryStrategy).parse();
+}
+function reflectParams(opts = {}) {
+  const strategy = resolveStrategy(opts);
+  const urlParams = parseFor(strategy);
+  const merged = /* @__PURE__ */ new Map();
+  for (const e of liveRegistrations(strategy)) {
+    (merged.get(e.key) ?? merged.set(e.key, {}).get(e.key)).live = e;
+  }
+  for (const e of catalogueRegistrations(strategy)) {
+    (merged.get(e.key) ?? merged.set(e.key, {}).get(e.key)).cat = e;
+  }
+  const out = [];
+  for (const [key, { live: L, cat: C }] of merged) {
+    const base = L ?? C;
+    const keys = base.keys;
+    const isAlias = keys.length > 1;
+    const liveKey = isAlias ? keys.find((k) => urlParams[k] !== void 0) ?? keys[0] : key;
+    const decodeParam = base.aliasParams?.[liveKey] ?? base.param;
+    let state;
+    let raw;
+    let canonical;
+    let value;
+    if (base.multi) {
+      const arr = urlParams[liveKey] ?? [];
+      raw = arr.length ? arr.join(",") : void 0;
+      value = decodeParam.decode(arr);
+      state = arr.length ? "canonical" : "absent";
+    } else {
+      const enc = urlParams[liveKey]?.[0];
+      const c = classifyParam(decodeParam, enc);
+      state = c.state;
+      value = decodeParam.decode(enc);
+      if (c.state !== "absent") raw = c.raw;
+      if (c.state === "stale" || c.state === "malformed") canonical = c.canonical;
+    }
+    out.push({
+      key,
+      keys,
+      strategy,
+      param: base.param,
+      aliasParams: base.aliasParams,
+      multi: base.multi,
+      label: L?.label ?? C?.label,
+      description: L?.description ?? C?.description,
+      examples: L?.examples ?? C?.examples,
+      defaultEncoded: base.defaultEncoded,
+      refs: L?.refs ?? 0,
+      ...isAlias && { liveKey },
+      state,
+      ...raw !== void 0 && { raw },
+      ...canonical !== void 0 && { canonical },
+      value
+    });
+  }
+  return out;
+}
+function reflectUnknown(opts = {}) {
+  const strategy = resolveStrategy(opts);
+  const urlParams = parseFor(strategy);
+  const known = /* @__PURE__ */ new Set();
+  for (const e of liveRegistrations(strategy)) for (const k of e.keys) known.add(k);
+  for (const e of catalogueRegistrations(strategy)) for (const k of e.keys) known.add(k);
+  return Object.keys(urlParams).filter((k) => !known.has(k)).map((k) => ({ key: k, raw: (urlParams[k] ?? []).join(",") }));
+}
+function onReflectionChange(cb) {
+  const unRegistry = onRegistryChange(cb);
+  const unQuery = queryStrategy.subscribe(cb);
+  const unHash = hashStrategy.subscribe(cb);
+  return () => {
+    unRegistry();
+    unQuery();
+    unHash();
+  };
+}
+var reflectionVersion = 0;
+onReflectionChange(() => {
+  reflectionVersion += 1;
+});
+function useParamReflection(opts = {}) {
+  const version = react.useSyncExternalStore(onReflectionChange, () => reflectionVersion, () => 0);
+  const strategy = opts.strategy;
+  return react.useMemo(
+    () => ({ params: reflectParams({ strategy }), unknown: reflectUnknown({ strategy }) }),
+    [version, strategy]
+  );
+}
 
 // src/index.ts
 function serializeParams(params) {
@@ -2202,6 +2442,7 @@ exports.BASE64_CHARS = BASE64_CHARS;
 exports.BitBuffer = BitBuffer;
 exports.DEFAULT_TAG_CYCLE = DEFAULT_TAG_CYCLE;
 exports.PRECISION_SCHEMES = precisionSchemes;
+exports.__resetRegistry = __resetRegistry;
 exports.base64Decode = base64Decode;
 exports.base64Encode = base64Encode;
 exports.base64FloatParam = base64FloatParam;
@@ -2210,6 +2451,7 @@ exports.bboxParam = bboxParam;
 exports.binaryParam = binaryParam;
 exports.boolParam = boolParam;
 exports.bytesToFloat = bytesToFloat;
+exports.catalogueRegistrations = catalogueRegistrations;
 exports.classifyParam = classifyParam;
 exports.cleanUrl = cleanUrl;
 exports.clearParams = clearParams;
@@ -2220,6 +2462,7 @@ exports.cycleTagFilter = cycleTagFilter;
 exports.datesParam = datesParam;
 exports.decodeDates = decodeDates;
 exports.defStringParam = defStringParam;
+exports.describeParams = describeParams;
 exports.effectiveTagState = effectiveTagState;
 exports.encodeDates = encodeDates;
 exports.encodeFloatAllModes = encodeFloatAllModes;
@@ -2236,6 +2479,7 @@ exports.getDefaultStrategy = getDefaultStrategy;
 exports.hashStrategy = hashStrategy;
 exports.inspectUrl = inspectUrl;
 exports.intParam = intParam;
+exports.liveRegistrations = liveRegistrations;
 exports.llzParam = llzParam;
 exports.multiFloatParam = multiFloatParam;
 exports.multiIntParam = multiIntParam;
@@ -2243,6 +2487,8 @@ exports.multiStringParam = multiStringParam;
 exports.notifyLocationChange = notifyLocationChange;
 exports.numberArrayParam = numberArrayParam;
 exports.numberTupleParam = numberTupleParam;
+exports.onReflectionChange = onReflectionChange;
+exports.onRegistryChange = onRegistryChange;
 exports.optFloatParam = optFloatParam;
 exports.optIntParam = optIntParam;
 exports.paginationParam = paginationParam;
@@ -2252,12 +2498,16 @@ exports.parseSignedParts = parseSignedParts;
 exports.pointParam = pointParam;
 exports.precisionSchemes = precisionSchemes;
 exports.queryStrategy = queryStrategy;
+exports.reflectParams = reflectParams;
+exports.reflectUnknown = reflectUnknown;
+exports.registerParam = registerParam;
 exports.resolveAlphabet = resolveAlphabet;
 exports.resolvePrecision = resolvePrecision;
 exports.runPassesTagFilters = runPassesTagFilters;
 exports.serializeMultiParams = serializeMultiParams;
 exports.serializeParams = serializeParams;
 exports.setDefaultStrategy = setDefaultStrategy;
+exports.strategyName = strategyName;
 exports.stringParam = stringParam;
 exports.stringsParam = stringsParam;
 exports.tagFilterParam = tagFilterParam;
@@ -2266,6 +2516,7 @@ exports.toFloat = toFloat;
 exports.updateUrl = updateUrl;
 exports.useMultiUrlState = useMultiUrlState;
 exports.useMultiUrlStates = useMultiUrlStates;
+exports.useParamReflection = useParamReflection;
 exports.useUrlAlias = useUrlAlias;
 exports.useUrlState = useUrlState;
 exports.useUrlStates = useUrlStates;

@@ -209,6 +209,89 @@ declare function multiIntParam(init?: number[]): MultiParam<number[]>;
 declare function multiFloatParam(init?: number[]): MultiParam<number[]>;
 
 /**
+ * A module-level registry of the params a running app has mounted, so a
+ * host can reflect on its own URL — what each key means, which keys it
+ * would honour, why a stale link decodes differently — without the
+ * library dictating any UI. See `reflection.ts` for the read side.
+ *
+ * The registry is deliberately framework-agnostic (a `Map` plus a
+ * listener set): the React hooks call `registerParam` on mount and the
+ * returned disposer on unmount, but nothing here imports React.
+ */
+
+type StrategyName = 'query' | 'hash';
+/** Map a live `LocationStrategy` to its reflection name. */
+declare function strategyName(strategy: LocationStrategy): StrategyName;
+/** Human copy a caller attaches to a param via the `describe` hook option. */
+interface ParamDescribe {
+    /** Short label, e.g. "Diff window". Falls back to the key when absent. */
+    label?: string;
+    /** Longer copy. `string` in the pure layer; a host may pass a ReactNode. */
+    description?: unknown;
+    /** Example encodings a host can show, e.g. `['260916-2001-1d']`. */
+    examples?: string[];
+}
+/** What a mounted hook (or a `describeParams` catalogue entry) registers. */
+interface ParamRegistration extends ParamDescribe {
+    /** Primary URL key (the canonical key, for an alias). */
+    key: string;
+    /** Every URL key this entry claims — one, except aliases claim all. */
+    keys: string[];
+    strategy: StrategyName;
+    /** Encoder/decoder for canonical forms and classification. */
+    param: Param<unknown>;
+    /** Per-key decoders for an alias entry (canonical + alias keys). */
+    aliasParams?: Record<string, Param<unknown>>;
+    /** True for `useMultiUrlState` (repeated-key) params. */
+    multi: boolean;
+    /** `param.encode(param.decode(undefined))` — the "currently default" form. */
+    defaultEncoded: Encoded;
+    /** Mount count — the same key may be read by several components. */
+    refs: number;
+}
+/** Arguments to {@link registerParam}. */
+interface RegisterInput extends ParamDescribe {
+    key: string;
+    keys?: string[];
+    strategy: StrategyName;
+    param: Param<unknown>;
+    aliasParams?: Record<string, Param<unknown>>;
+    multi?: boolean;
+}
+/** Subscribe to registry mutations (register / unregister / describeParams). */
+declare function onRegistryChange(cb: () => void): () => void;
+/**
+ * Register a mounted param. Returns a disposer to call on unmount.
+ *
+ * The same `(strategy, key)` registered by several components ref-counts:
+ * the first registration's `param` and metadata are kept (a stable
+ * identity for the key), and later registrations only bump `refs`. The
+ * disposer is idempotent and drops the entry when `refs` hits zero.
+ */
+declare function registerParam(input: RegisterInput): () => void;
+/**
+ * Register descriptive metadata for keys with no mounted hook — a
+ * whole-app catalogue. Entries reflect with `refs: 0` and are merged
+ * under any live registration of the same key (the live entry wins;
+ * catalogue fills in metadata the hook didn't supply). Pass a `param`
+ * for a dormant entry to still classify against the URL.
+ *
+ * Returns a disposer that removes the entries it added.
+ */
+declare function describeParams(entries: Record<string, ParamDescribe & {
+    param?: Param<unknown>;
+    multi?: boolean;
+}>, opts?: {
+    strategy?: StrategyName;
+}): () => void;
+/** Snapshot of all live registrations for a strategy (or all strategies). */
+declare function liveRegistrations(strategy?: StrategyName): ParamRegistration[];
+/** Snapshot of all catalogue entries for a strategy (or all strategies). */
+declare function catalogueRegistrations(strategy?: StrategyName): ParamRegistration[];
+/** Test-only: drop every live and catalogue registration. */
+declare function __resetRegistry(): void;
+
+/**
  * Structured reporting on the state of the URL relative to a declared param
  * spec, plus an imperative cleanup helper. Decoupled by design: `inspectUrl`
  * is pure (no side effects); `cleanUrl` mutates the URL but never on its own
@@ -363,12 +446,18 @@ interface UseUrlStateOptions {
      * tying that to cleanup.
      */
     onDiagnostic?: (diag: ParamDiagnostic) => void;
+    /**
+     * Human copy attached to this param in the reflection registry
+     * (`reflectParams` / `useParamReflection`). Purely descriptive — it
+     * doesn't affect encoding.
+     */
+    describe?: ParamDescribe;
 }
 /**
  * Options for `useUrlStates` (multi-key) — extends single-key options with
  * URL-level reporting and cleanup.
  */
-interface UseUrlStatesOptions<P extends Params = Params> extends Omit<UseUrlStateOptions, 'onDiagnostic'> {
+interface UseUrlStatesOptions<P extends Params = Params> extends Omit<UseUrlStateOptions, 'onDiagnostic' | 'describe'> {
     /**
      * Fired with a `UrlDiagnostics` whenever the URL changes. Reports
      * unrecognized keys, malformed values, and stale-format values.
@@ -380,6 +469,11 @@ interface UseUrlStatesOptions<P extends Params = Params> extends Omit<UseUrlStat
      * observing, or both.
      */
     cleanOnMount?: CleanUrlPolicy<P>;
+    /**
+     * Per-key human copy for the reflection registry. Keys not listed still
+     * register (label falls back to the key).
+     */
+    describe?: Partial<Record<keyof P, ParamDescribe>>;
 }
 /**
  * React hook for managing a single URL query parameter.
@@ -550,6 +644,11 @@ interface AliasInput<T> {
      * subsequent navigations).
      */
     canonicalizeOnMount?: boolean;
+    /**
+     * Human copy for the reflection registry. The alias registers as one
+     * entry keyed by the canonical key, claiming every key in `keys`.
+     */
+    describe?: ParamDescribe;
 }
 /**
  * React hook for managing one logical value sourced from multiple URL
@@ -1489,6 +1588,54 @@ declare function cycleTagFilter<T extends string>(filters: TagFilters<T>, tag: T
 declare function tagFilterParam<T extends string>(options?: TagFilterParamOptions<T>): Param<TagFilters<T>>;
 
 /**
+ * Reflection: read the {@link registry} against the live URL so a host can
+ * render what its params mean and how the current URL maps onto them. All
+ * pure except {@link useParamReflection}, the React convenience wrapper.
+ */
+
+/** A registered param plus its live classification against the current URL. */
+interface ParamReflection extends ParamRegistration {
+    /** For an alias entry, which of `keys` the URL currently carries. */
+    liveKey?: string;
+    /** Classification of the URL value (as `classifyParam` / `UrlDiagnostics`). */
+    state: 'absent' | 'canonical' | 'stale' | 'malformed';
+    /** What the URL has (joined, for multi-value). */
+    raw?: string;
+    /** What it would normalize to, when `stale`/`malformed`. */
+    canonical?: string;
+    /** The decoded value. */
+    value: unknown;
+}
+/** A URL key nothing registered, with its raw value. */
+interface UnknownParam {
+    key: string;
+    raw: string;
+}
+interface ReflectOptions {
+    /** Which strategy's params to reflect. Defaults to the active default. */
+    strategy?: StrategyName;
+}
+/**
+ * Every registered param for a strategy, each with its live classification.
+ * A live hook and a `describeParams` catalogue entry for the same key merge
+ * (the live entry wins; the catalogue fills in metadata it lacks).
+ */
+declare function reflectParams(opts?: ReflectOptions): ParamReflection[];
+/** The URL's keys nothing registered (query or catalogue), with raw values. */
+declare function reflectUnknown(opts?: ReflectOptions): UnknownParam[];
+/** Subscribe to registry mutations and URL navigations. */
+declare function onReflectionChange(cb: () => void): () => void;
+/**
+ * React hook: the reflection of registered params + unknown keys,
+ * re-rendering on hook mount/unmount and on URL navigation. Reads the
+ * registry only — it never registers a param itself.
+ */
+declare function useParamReflection(opts?: ReflectOptions): {
+    params: ParamReflection[];
+    unknown: UnknownParam[];
+};
+
+/**
  * Core types and utilities for URL parameter management
  */
 
@@ -1533,4 +1680,4 @@ declare function getCurrentParams(): Record<string, Encoded>;
  */
 declare function updateUrl(params: Record<string, Encoded>, push?: boolean): void;
 
-export { ALPHABETS, type AliasConflictMode, type AliasInput, type AliasMergeResult, type Alphabet, type AlphabetName, BASE64_CHARS, type BBox, type BBoxParamOptions, type Base64Options, type BinaryParamOptions, BitBuffer, type CleanUrlPolicy, type CodeMap, DEFAULT_TAG_CYCLE, type DateOrGetter, type DatesParamOptions, type DeprecatedInfo, type DeprecatedMigration, type DeprecatedSpec, type Encoded, type FixedPoint, type FlagPackSpec, type FlagPackValues, type Float, type FloatEncoding, type FloatParamOptions, type InspectUrlOptions, type KeyedDiagnostic, type LLZ, type LLZParamOptions, type LocationStrategy, type MultiEncoded, type MultiParam, type NumberFieldEncoding, type NumberPath, type NumberTupleField, type NumberTupleParamOptions, precisionSchemes as PRECISION_SCHEMES, type Pagination, type Param, type ParamDiagnostic, type ParamValues, type Params, type Point, type PointParamOptions, type PrecisionScheme, type TagDefaults, type TagFilterParamOptions, type TagFilters, type TagPrefixes, type TagState, type UrlDiagnostics, type UseUrlStateOptions, type UseUrlStatesOptions, type ViewState, type ViewStateParamOptions, base64Decode, base64Encode, base64FloatParam, base64Param, bboxParam, binaryParam, boolParam, bytesToFloat, classifyParam, cleanUrl, clearParams, codeParam, codesParam, createLookupMap, cycleTagFilter, datesParam, decodeDates, defStringParam, effectiveTagState, encodeDates, encodeFloatAllModes, encodePointAllModes, enumParam, flagPackParam, floatParam, floatToBytes, formatSignedParts, fromFixedPoint, fromFloat, getCurrentParams, getDefaultStrategy, hashStrategy, inspectUrl, intParam, llzParam, multiFloatParam, multiIntParam, multiStringParam, notifyLocationChange, numberArrayParam, numberTupleParam, optFloatParam, optIntParam, paginationParam, parseMultiParams, parseParams, parseSignedParts, pointParam, precisionSchemes, queryStrategy, resolveAlphabet, resolvePrecision, runPassesTagFilters, serializeMultiParams, serializeParams, setDefaultStrategy, stringParam, stringsParam, tagFilterParam, toFixedPoint, toFloat, updateUrl, useMultiUrlState, useMultiUrlStates, useUrlAlias, useUrlState, useUrlStates, validateAlphabet, viewStateParam };
+export { ALPHABETS, type AliasConflictMode, type AliasInput, type AliasMergeResult, type Alphabet, type AlphabetName, BASE64_CHARS, type BBox, type BBoxParamOptions, type Base64Options, type BinaryParamOptions, BitBuffer, type CleanUrlPolicy, type CodeMap, DEFAULT_TAG_CYCLE, type DateOrGetter, type DatesParamOptions, type DeprecatedInfo, type DeprecatedMigration, type DeprecatedSpec, type Encoded, type FixedPoint, type FlagPackSpec, type FlagPackValues, type Float, type FloatEncoding, type FloatParamOptions, type InspectUrlOptions, type KeyedDiagnostic, type LLZ, type LLZParamOptions, type LocationStrategy, type MultiEncoded, type MultiParam, type NumberFieldEncoding, type NumberPath, type NumberTupleField, type NumberTupleParamOptions, precisionSchemes as PRECISION_SCHEMES, type Pagination, type Param, type ParamDescribe, type ParamDiagnostic, type ParamReflection, type ParamRegistration, type ParamValues, type Params, type Point, type PointParamOptions, type PrecisionScheme, type ReflectOptions, type RegisterInput, type StrategyName, type TagDefaults, type TagFilterParamOptions, type TagFilters, type TagPrefixes, type TagState, type UnknownParam, type UrlDiagnostics, type UseUrlStateOptions, type UseUrlStatesOptions, type ViewState, type ViewStateParamOptions, __resetRegistry, base64Decode, base64Encode, base64FloatParam, base64Param, bboxParam, binaryParam, boolParam, bytesToFloat, catalogueRegistrations, classifyParam, cleanUrl, clearParams, codeParam, codesParam, createLookupMap, cycleTagFilter, datesParam, decodeDates, defStringParam, describeParams, effectiveTagState, encodeDates, encodeFloatAllModes, encodePointAllModes, enumParam, flagPackParam, floatParam, floatToBytes, formatSignedParts, fromFixedPoint, fromFloat, getCurrentParams, getDefaultStrategy, hashStrategy, inspectUrl, intParam, liveRegistrations, llzParam, multiFloatParam, multiIntParam, multiStringParam, notifyLocationChange, numberArrayParam, numberTupleParam, onReflectionChange, onRegistryChange, optFloatParam, optIntParam, paginationParam, parseMultiParams, parseParams, parseSignedParts, pointParam, precisionSchemes, queryStrategy, reflectParams, reflectUnknown, registerParam, resolveAlphabet, resolvePrecision, runPassesTagFilters, serializeMultiParams, serializeParams, setDefaultStrategy, strategyName, stringParam, stringsParam, tagFilterParam, toFixedPoint, toFloat, updateUrl, useMultiUrlState, useMultiUrlStates, useParamReflection, useUrlAlias, useUrlState, useUrlStates, validateAlphabet, viewStateParam };
