@@ -442,6 +442,7 @@ export function useSectionSpy(opts: SectionSpyOptions = {}): void {
     history.scrollRestoration = 'manual'
     let raf = 0
     let lastWrite = 0
+    let lastH = document.documentElement.scrollHeight
     const onScroll = (): void => {
       const now = performance.now()
       if (!isUserScroll(now)) return
@@ -449,6 +450,11 @@ export function useSectionSpy(opts: SectionSpyOptions = {}): void {
       if (raf) return
       raf = requestAnimationFrame(() => {
         raf = 0
+        // A shrinking page clamps scrollY (route teardown, a collapsing panel);
+        // that scroll isn't the reader's, so don't save or name a section from it.
+        const h = document.documentElement.scrollHeight
+        if (h < lastH) { lastH = h; return }
+        lastH = h
         savePosition(posCfg, keyRef.current, window.scrollY)
         if (write === 'off') return
         const id = sectionInView(idsFor(), reference)
@@ -465,6 +471,9 @@ export function useSectionSpy(opts: SectionSpyOptions = {}): void {
       window.removeEventListener('scroll', onScroll)
       if (raf) cancelAnimationFrame(raf)
       history.scrollRestoration = prevRestoration
+      // Leaving the page: forget reader input so a scrollY clamp during the
+      // route teardown (the next page is shorter) isn't saved as a position.
+      resetUserScroll()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, write])
