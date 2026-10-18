@@ -3,7 +3,7 @@
  * e.g., ?tag=a&tag=b&tag=c
  */
 
-import type { MultiEncoded } from './core.js'
+import type { MultiEncoded } from './strategies.js'
 
 /**
  * A bidirectional converter between a typed value and its multi-value URL representation.

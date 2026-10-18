@@ -17,7 +17,7 @@
  * ```
  */
 
-import { setDefaultStrategy, hashStrategy } from './core.js'
+import { setDefaultStrategy, hashStrategy } from './strategies.js'
 
 // Set hash as the default strategy for this entry point
 setDefaultStrategy(hashStrategy)

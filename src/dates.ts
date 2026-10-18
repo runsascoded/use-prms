@@ -58,7 +58,7 @@
  * want `Date`s can map.
  */
 
-import type { Param } from './index.js'
+import type { Param } from './types.js'
 
 const DAY_MS = 86_400_000
 /**

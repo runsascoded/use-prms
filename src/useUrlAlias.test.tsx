@@ -3,7 +3,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
-import type { Param } from './index.js'
+import type { Param } from './types.js'
 import { stringParam } from './params.js'
 import { useUrlAlias } from './useUrlAlias.js'
 

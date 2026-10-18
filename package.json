@@ -12,6 +12,11 @@
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
     },
+    "./core": {
+      "types": "./dist/core.d.ts",
+      "import": "./dist/core.js",
+      "require": "./dist/core.cjs"
+    },
     "./hash": {
       "types": "./dist/hash.d.ts",
       "import": "./dist/hash.js",
@@ -51,11 +56,14 @@
     "@testing-library/react": "^16.3.2",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "eslint": "^10.13.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
     "happy-dom": "^20.7.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "tsup": "^8.3.5",
     "typescript": "^5.7.2",
+    "typescript-eslint": "^8.71.2",
     "vitest": "^4.0.18"
   },
   "peerDependencies": {

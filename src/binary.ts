@@ -126,7 +126,7 @@ export interface BinaryParamOptions<T> {
   alphabet?: Alphabet
 }
 
-import type { Param } from './index.js'
+import type { Param } from './types.js'
 
 /**
  * Create a param that encodes/decodes via binary representation

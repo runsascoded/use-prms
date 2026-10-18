@@ -10,8 +10,8 @@
  */
 
 import type { Encoded, Param } from './index.js'
-import type { LocationStrategy } from './core.js'
-import { hashStrategy } from './core.js'
+import type { LocationStrategy } from './strategies.js'
+import { hashStrategy } from './strategies.js'
 
 export type StrategyName = 'query' | 'hash'
 

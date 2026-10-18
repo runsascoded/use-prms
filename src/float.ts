@@ -424,7 +424,7 @@ export class BitBuffer {
   }
 }
 
-import type { Param } from './index.js'
+import type { Param } from './types.js'
 
 /**
  * Encoding mode for float params

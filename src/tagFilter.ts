@@ -12,7 +12,7 @@
  * detect/log non-canonical input via the diagnostics layer.
  */
 
-import type { Param } from './index.js'
+import type { Param } from './types.js'
 
 /**
  * Per-tag filter state.

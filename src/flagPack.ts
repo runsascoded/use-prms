@@ -18,7 +18,7 @@
  * `cleanUrl({ stale: 'normalize' })` to the canonical spec-declared form.
  */
 
-import type { Param } from './index.js'
+import type { Param } from './types.js'
 
 /** Spec describing a flag pack: `<letter>: <default value>` map. */
 export type FlagPackSpec = Record<string, boolean>

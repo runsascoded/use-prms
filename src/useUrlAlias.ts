@@ -17,9 +17,9 @@
  */
 
 import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react'
-import type { Param } from './index.js'
-import type { LocationStrategy, MultiEncoded } from './core.js'
-import { getDefaultStrategy } from './core.js'
+import type { Param } from './types.js'
+import type { LocationStrategy, MultiEncoded } from './strategies.js'
+import { getDefaultStrategy } from './strategies.js'
 import { registerParam, strategyName, type ParamDescribe } from './registry.js'
 
 /** Result returned by an `AliasInput<T>['merge']` callback. */

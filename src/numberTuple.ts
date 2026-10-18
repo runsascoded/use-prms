@@ -6,7 +6,7 @@
  * factories.
  */
 
-import type { Param } from './index.js'
+import type { Param } from './types.js'
 
 /**
  * Encoding for a single number field within a tuple. Exactly one of

@@ -5,7 +5,7 @@
  */
 
 import { useMemo, useSyncExternalStore } from 'react'
-import { getDefaultStrategy, queryStrategy, hashStrategy } from './core.js'
+import { getDefaultStrategy, queryStrategy, hashStrategy } from './strategies.js'
 import { classifyParam } from './diagnostics.js'
 import {
   catalogueRegistrations,

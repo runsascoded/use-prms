@@ -10,8 +10,8 @@
  */
 import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useSyncExternalStore } from 'react'
 import type { ReactElement, ReactNode } from 'react'
-import { getDefaultStrategy, hashStrategy, silentPushState, silentReplaceState } from '../core.js'
-import { parseMultiParams, serializeMultiParams } from '../core.js'
+import { getDefaultStrategy, hashStrategy, silentPushState, silentReplaceState } from '../strategies.js'
+import { parseMultiParams, serializeMultiParams } from '../strategies.js'
 import { navScroll, sectionInView, defaultReference, type NavScroll, type NavSection, type NavType, type ReferenceLine } from './nav.js'
 import { INPUT_EVENTS, isUserScroll, lastInputAt, markUserScroll, onInput, resetUserScroll } from './userScroll.js'
 

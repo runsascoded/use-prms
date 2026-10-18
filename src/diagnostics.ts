@@ -6,9 +6,9 @@
  * normalize URL state without conflating the two concerns.
  */
 
-import type { Param } from './index.js'
-import type { LocationStrategy } from './core.js'
-import { getDefaultStrategy } from './core.js'
+import type { Param } from './types.js'
+import type { LocationStrategy } from './strategies.js'
+import { getDefaultStrategy } from './strategies.js'
 
 /**
  * Per-key diagnostic for a declared parameter.
