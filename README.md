@@ -22,6 +22,7 @@ Type-safe URL-parameter (query and hash) management with minimal, human-readable
 - [Date Sets](#dates)
 - [URL Diagnostics](#diagnostics)
 - [URL Reflection](#reflection)
+- [Section Spy](#sections)
 - [Framework-Agnostic Core](#core)
 - [Hash Params](#hash)
 - [API Reference](#api)
@@ -697,6 +698,34 @@ const { params, unknown } = useParamReflection()
 ```
 
 Each `ParamReflection` carries the param's live classification (`absent` / `canonical` / `stale` / `malformed`, the same axis as `classifyParam`), its decoded `value`, the `raw` URL value and the `canonical` form it would normalize to. For a whole-app catalogue of keys — including ones not currently mounted (they reflect with `refs: 0`) — register metadata once with `describeParams({ c: { label: 'Count', param: intParam(0) } })`; a live hook of the same key merges over it (the hook wins, the catalogue fills gaps). See the [demo](https://use-prms.runsascoded.com/#section-reflection) for a panel built entirely from this API.
+
+## Section Spy <a id="sections"></a>
+
+A separate entry point, `use-prms/sections`, names the section a reader is looking at in the URL — as a query param (`?s=diff`, visible to a dynamic `og:image`), a fragment (`#diff`), or off — and restores scroll across navigation. React-only; not re-exported from `use-prms` or `use-prms/hash`.
+
+```typescript
+import { useSectionSpy, useSectionInView, SectionLink, jumpToSection } from 'use-prms/sections'
+import { useLocation, useNavigationType } from 'react-router-dom'
+
+useSectionSpy({
+  sections: { selector: 'section[id^="section-"]' },   // or an explicit id array, in page order
+  mode: { kind: 'param', key: 's',                      // default key 's'; or { kind: 'fragment' }
+    encode: id => id.replace(/^section-/, ''),          // ?s=boolean ↔ #section-boolean
+    decode: v => `section-${v}` },
+  nav: { location: useLocation(), navType: useNavigationType() },  // omit for a window adapter
+})
+
+const inView = useSectionInView()   // the current section (a store; for TOC highlighting)
+```
+
+What you get:
+
+- **Deep links that land** — `?s=diff` (or `#diff`) scrolls its section under the header on load, *pursuing* it as late content (query data, lazy charts) settles above.
+- **A URL that names the view** — the reader's scrolling writes the in-view section with `replaceState` (no history spam), written *silently* so no `useUrlState` consumer re-renders per frame.
+- **Back/forward restore** — each history entry returns to where it was left.
+- **Param mode for dOGI** — the fragment never reaches the server, but `?s=diff` does, so a Cloudflare Worker can render a per-section `og:image`. Under `use-prms/hash` the section defaults to the query (`?s=diff#e&c=5`) so it stays server-visible.
+
+Helpers: `jumpToSection(id)` (scroll + name it), `sectionHref(id)` (a link / copy URL), `withoutSection(search)` (strip the section param), and `SectionLink` (a heading link: a plain click jumps, a modified / middle click opens natively). Fragment mode is refused under `use-prms/hash` (the fragment holds params) with a dev warning. See the [demo](https://use-prms.runsascoded.com/#section-sections).
 
 ## Framework-Agnostic Core <a id="core"></a>
 
