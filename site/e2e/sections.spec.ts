@@ -10,6 +10,13 @@ const parkOffset = (page: Page, id: string) => page.evaluate((id: string) => {
   return Math.round(el.getBoundingClientRect().top - smt)
 }, id)
 
+// The map's remote style lands ~1s after load and MapLibre builds it on the
+// main thread (software GL in headless Chromium: a ~3s stall), racing the
+// scroll assertions. These tests don't need the map, so leave it inert, as on CI.
+test.beforeEach(async ({ page }) => {
+  await page.route('**//basemaps.cartocdn.com/**', route => route.abort())
+})
+
 test.describe('Section spy (/ route, param mode)', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/')
@@ -44,11 +51,6 @@ test.describe('Section spy (/ route, param mode)', () => {
   })
 
   test('back / forward restores scroll position', async ({ page }) => {
-    // Headless CI has no WebGL, so the map doesn't render and the home page is
-    // far shorter — the saved scroll target becomes unreachable and the restore
-    // lands near the top. The restore logic is unit-tested (src/sections/
-    // nav.test.ts) and this passes in a real (GPU) browser locally.
-    test.skip(!!process.env.CI, 'scroll restore needs a GPU/full-height page; validated locally + unit-tested')
     // Reader-scroll down so a position is saved for this entry.
     await page.mouse.move(650, 450)
     await page.mouse.wheel(0, 2500)
@@ -57,7 +59,10 @@ test.describe('Section spy (/ route, param mode)', () => {
     expect(y).toBeGreaterThan(1000)
 
     // Navigate to /hash (a new history entry), then back.
-    await page.getByRole('link', { name: 'Hash params are also supported.' }).click()
+    // Dispatch the click rather than `click()`: Playwright first scrolls the
+    // (near-top) link into view, and within a second of the wheel the spy
+    // reads that as the reader scrolling up to it — saving ~89 as the position.
+    await page.getByRole('link', { name: 'Hash params are also supported.' }).dispatchEvent('click')
     await expect(page).toHaveURL(/\/hash/)
     await page.goBack()
 
