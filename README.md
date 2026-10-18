@@ -24,6 +24,7 @@ Type-safe URL-parameter (query and hash) management with minimal, human-readable
 - [URL Reflection](#reflection)
 - [Section Spy](#sections)
 - [Framework-Agnostic Core](#core)
+- [Vue](#vue)
 - [Hash Params](#hash)
 - [API Reference](#api)
 - [Examples](#examples)
@@ -34,10 +35,10 @@ Type-safe URL-parameter (query and hash) management with minimal, human-readable
 
 - 🎯 **Type-safe**: Full TypeScript support with generic `Param<T>` interface
 - 📦 **Tiny URLs**: Smart encoding - omit defaults, use short keys, `+` for spaces
-- ⚛️ **React hooks**: `useUrlState()` and `useUrlStates()` for seamless integration
-- 🔧 **Framework-agnostic**: Core utilities work anywhere, React hooks are optional
+- ⚛️ **React & Vue bindings**: `useUrlState()` / `useUrlStates()` for both, on a shared engine — identical URLs from either (`use-prms` / `use-prms/vue`)
+- 🔧 **Framework-agnostic core**: codecs, strategies, diagnostics, and the `UrlBinding` engine run anywhere (Workers, Node) via `use-prms/core`
 - 🌳 **Tree-shakeable**: ESM + CJS builds with TypeScript declarations
-- 0️⃣ **Zero dependencies**: Except React (peer dependency, optional)
+- 0️⃣ **Zero dependencies**: React and Vue are optional peer dependencies
 - 🔁 **Multi-value params**: Support for repeated keys like `?tag=a&tag=b`
 - #️⃣ **Hash params**: Use hash fragment (`#key=value`) instead of query string
 
@@ -729,19 +730,48 @@ Helpers: `jumpToSection(id)` (scroll + name it), `sectionHref(id)` (a link / cop
 
 ## Framework-Agnostic Core <a id="core"></a>
 
-Use the core utilities without React:
+Every codec, the location strategies, multi-value parsing, the reflection registry, and URL diagnostics are framework-free. Import them from **`use-prms/core`** to use them with no UI framework in the module graph — a Cloudflare Worker, a Node script, a Svelte app:
 
 ```typescript
-import { boolParam, serializeMultiParams, parseMultiParams } from 'use-prms'
+import { boolParam, serializeMultiParams, parseMultiParams } from 'use-prms/core'
 
 // Encode
 const params = { z: [boolParam.encode(true) ?? ''], d: ['gym'] }
 const search = serializeMultiParams(params)  // "z&d=gym"
 
 // Decode
-const parsed = parseMultiParams(window.location.search)
+const parsed = parseMultiParams('?z&d=gym')
 const zoom = boolParam.decode(parsed.z?.[0])  // true
 ```
+
+`use-prms/core` also exports the `UrlBinding` engine — the subscribe/snapshot + causality + debounce state machine that both the React and Vue bindings are built on — plus `writeParams` and `getUrlSnapshot`. That's enough to canonicalize a URL's params (parse → drop defaults → re-encode) server-side for stable dynamic-`og:image` cache keys, without a DOM. Both `use-prms` and `use-prms/vue` re-export this whole surface, so the same codecs are available from whichever entry you already import.
+
+## Vue <a id="vue"></a>
+
+`use-prms/vue` is the Vue 3 binding. It reuses the same codecs and the same `UrlBinding` engine as React, so a React app and a Vue app produce **byte-identical URLs** for identical state.
+
+```vue
+<script setup lang="ts">
+import { useUrlState, useUrlStates, boolParam, intParam } from 'use-prms/vue'
+
+const zoom = useUrlState('z', boolParam)       // writable Ref
+const { values, setValues } = useUrlStates({   // reactive object + batched setter
+  x: intParam(0),
+  y: intParam(0),
+})
+</script>
+
+<template>
+  <input type="checkbox" v-model="zoom" />
+  <input type="number" v-model.number="values.x" />
+</template>
+```
+
+- `useUrlState` / `useMultiUrlState` return a writable `Ref` (v-model-able).
+- `useUrlStates` / `useMultiUrlStates` return `{ values, setValues }`, where `values` is a `reactive` object (two-way per key) and `setValues` batches several keys into one history entry.
+- Each composable holds its URL subscription for the component scope and tears it down via `onScopeDispose`.
+
+`vue` is an optional peer dependency. Live: the [Vue demo](https://use-prms.runsascoded.com/vue.html), byte-equal with the [React one](https://use-prms.runsascoded.com/parity).
 
 ## Hash Params <a id="hash"></a>
 
