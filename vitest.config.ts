@@ -7,6 +7,9 @@ export default defineConfig({
       '**/node_modules/**',
       '**/dist/**',
       'site/e2e/**',
+      // `.github/scripts/*.test.cjs` are node:test suites (run via `node
+      // --test` in the preview workflow), not vitest.
+      '.github/**',
     ],
   },
 })
