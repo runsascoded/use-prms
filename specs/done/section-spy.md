@@ -1,6 +1,6 @@
 # Section spy (`use-prms/sections`)
 
-**Status:** proposed. **Source:** disky's [`hashSpy.ts`] (+ [`hashSpy.test.ts`], [`SectionAnchor.tsx`]), in production on disky's home page ([`App.tsx`] `useHashSpy`, ~L669) and staged-deletions page ([`StagedPage.tsx`] ~L344), toggled by [`prefs.tsx`]'s `scroll-spy` pref.
+**Status:** implemented (`use-prms/sections`; `src/sections/`). See [Implementation notes](#implementation-notes) for deltas and resolved open questions. **Source:** disky's [`hashSpy.ts`] (+ [`hashSpy.test.ts`], [`SectionAnchor.tsx`]), in production on disky's home page ([`App.tsx`] `useHashSpy`, ~L669) and staged-deletions page ([`StagedPage.tsx`] ~L344), toggled by [`prefs.tsx`]'s `scroll-spy` pref.
 
 ## Motivation
 
@@ -45,7 +45,7 @@ export type SectionMode =
   | { kind: 'fragment' }                     // `#diff` (hashSpy parity)
   | {
       kind: 'param'
-      /** URL key holding the section. Default: `'s'` (see Open questions). */
+      /** URL key holding the section. Default: `'s'` (Ryan, 2026-10-17: shorter is better for this). */
       key?: string
       /** Where the param lives. Default `'query'`, even under `use-prms/hash` (dOGI visibility). */
       location?: 'query' | 'hash'
@@ -226,32 +226,30 @@ for (const [id, label] of SECTION_LABELS) useAction(`sections:go:${id}`, { label
 
 (The loop is illustrative; real code uses `useActions` with a record, to keep hook order stable.)
 
-## Migration (disky)
+## Migration (disky) <a id="migration"></a>
 
-Phase 1, no behavior change (fragment mode):
+disky owns retiring its bespoke `hashSpy` and adopting `use-prms/sections`. The actionable migration spec lives in **disky's `specs/use-prms-sections.md`** (both phases, the dependency bump, and the dOGI change to read `s` with `section` as a fallback). Not tracked here.
 
-- Delete `site/src/hashSpy.ts`, `site/src/hashSpy.test.ts` (tests now live upstream).
-- `SectionAnchor.tsx` → re-export `SectionLink` with `className="sec-anchor"` (or delete it and update `App.tsx` / `SizeOverTime.tsx` imports).
-- `App.tsx`: `useSectionSpy({ sections: SECTION_IDS, nav: { location, navType }, deps: [mapTree, meta, scans], aliases: LEGACY_ANCHORS, reference: { offset: topbarH }, write: spy === 'on' ? 'replace' : 'off', mode: { kind: 'fragment' } })`. `StagedPage.tsx` likewise, `aliases: memberAnchors`.
-- `prefs.tsx` keeps the `scroll-spy` pref and `SiteNav` menu item; it maps to `write`.
-- Saved positions under the old `hashSpy.pos` sessionStorage key are lost once (per tab); acceptable.
+## Implementation notes <a id="implementation-notes"></a>
 
-Phase 2, param mode (`key: 'section'`, matching dOGI `pageView`'s existing `sp.get('section') === 'diff'`):
+Built as `src/sections/`: `nav.ts` (pure `navScroll` / `sectionInView` + the stale-carry rule), `userScroll.ts` (reader-input tracking), `spy.tsx` (the React layer), `index.ts` (public surface). tsup `sections` entry + a `./sections` `exports` map. `core.ts` exports `silentReplaceState` / `silentPushState` as specified. 24 unit tests (`nav.test.ts` 16, `spy.test.tsx` 8) + 6 Playwright e2e (`site/e2e/sections.spec.ts`).
 
-- Existing `#diff`, `#tbl`, legacy `#changes` / `#size-over-time` / `#created-date` links, and StagedPage's `#batch-123` keep working via `adoptFragment` (+ `aliases`): they land, then the URL becomes `?section=diff`.
-- `drillTo` (~L746): `withoutSection(search)` alongside its `q.delete('open')`. Audit every `navigate({ search })` built from router state (the `?path=` and legacy-param rewrites at ~L169/~L333 pass `hash: window.location.hash`, which stays correct; their `search` comes from the router and gets the carry rule).
-- `app.scss`: `.stage-batch:target` → `.stage-batch[data-section-target]`.
-- dOGI: extend `pageView` beyond `diff` (`over-time`, `mtime`, `tbl` cards) as a follow-up; out of scope here.
+Deltas from the spec as written:
 
-## Open questions
+- **Scroll-restore robustness (new).** The spy mounts per-route in the demo (disky's `hashSpy` is app-level and persistent). A per-route mount exposed a bug: when a route change shrinks the page the browser clamps `scrollY`, and if a reader scroll happened <1s earlier that clamp was mis-saved as position 0, clobbering the real one. Fix: the scroll handler skips a frame where the document just shrank, and the spy resets reader input on unmount. This is a general robustness improvement, not demo-specific.
+- **Debounce fix shape.** Implemented across all four hooks (`useUrlState` / `useUrlStates` / `useMultiUrlState` / `useMultiUrlStates`). Behavior change: an external write to a *different* key no longer discards a pending debounced value (two tests pin both cases).
+- **`useWindowNav` `navType`** is best-effort (`POP` on `popstate`, `REPLACE` on `use-prms:locationchange`); apps with a router pass `nav` explicitly, which is the tested path.
+- **Demo.** Mounted in `ParamsDemo` with a sticky TOC (`useSectionInView`, items as `SectionLink`) and a dedicated "Section Spy" panel (param/fragment/off toggle + a live in-view/URL readout) — chosen over wiring the toggle into `FloatingControls`, which would need App-level plumbing. The "slow section" pursuit sub-demo was not added; pursuit is exercised by deep links and the e2e.
 
-1. **Default param key**: `s` (short, Ryan's example) vs `section` (self-describing in shared links; disky's dOGI already uses it). Or no default, required in param mode?
-2. **Positions inside a section**: worth a sub-section anchor like `?s=diff.40` (40% through the section, viewport-independent) for long sections? Raw pixel `scrollY` in the URL is viewport-dependent, so not that. Element selectors (`?s=css:…`) feel like scope creep.
-3. **Adopted fragment: drop or keep?** Keeping (`?s=diff#diff`) preserves native `:target` but duplicates state and goes stale on scroll; proposal drops it.
-4. **Find-in-page and third-party `scrollIntoView`** don't count as reader scrolls, so the URL lags. A `scrollend` that follows no programmatic scroll of ours could count; risky (layout clamps also produce `scrollend`).
-5. **Per-key snapshot memoization** in `useUrlState` (re-render only when a hook's own key changes) would make silent writes less load-bearing and help all apps. Do it here, or separately?
-6. **Non-window scroll containers** (e.g. a scrolling `<main>`): out of scope for v1?
-7. **Stale-carry on path change** strips a section that equals the router's previous one; an explicit cross-path link to the *same* section id would be swallowed. Rare in practice; acceptable, or require `withoutSection` and drop the rule?
+Resolved open questions:
+
+1. **Default param key** — **`s`** (Ryan, 2026-10-17: "shorter = better for this"). disky passes the default and its dOGI reads `s` with `section` as a fallback alias.
+2. **Positions inside a section** (`?s=diff.40`) — not in v1 (scope creep).
+3. **Adopted fragment** — dropped on adoption (as proposed); `?s=diff`, no lingering `#diff`.
+4. **Find-in-page / third-party `scrollIntoView`** — not counted as reader scrolls; the URL lags (accepted for v1).
+5. **Per-key snapshot memoization** — only the minimal debounce fix landed; the broader per-key re-render memoization is deferred to its own change (Ryan, 2026-10-17).
+6. **Non-window scroll containers** — out of scope for v1.
+7. **Stale-carry on path change** — accepted as-is; a cross-path link to the same section id is swallowed (rare; `withoutSection` is the escape hatch).
 
 [`hashSpy.ts`]: ../../../disky/site/src/hashSpy.ts
 [`hashSpy.test.ts`]: ../../../disky/site/src/hashSpy.test.ts
