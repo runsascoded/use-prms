@@ -246,7 +246,10 @@ export function useUrlState<T>(
   // Pending value during debounce window (set by setValue, cleared when URL is written)
   const pendingRef = useRef<{
     decoded: T
-    prevRaw: string
+    // This key's URL-encoded value when the debounce started. Compared against
+    // the live value (not the whole raw search) so an unrelated external write
+    // — e.g. the section spy's silent `?s=…` — doesn't discard the pending value.
+    prevEncoded: string | undefined
   } | null>(null)
 
   // Create debounced write ref (declared early so render code can reference it)
@@ -265,13 +268,11 @@ export function useUrlState<T>(
   // Decode value with causality tracking
   const cacheRef = useRef<{ encoded: typeof encoded; param: Param<T>; decoded: T } | null>(null)
 
-  const raw = strategy.getRaw()
-
   let value: T
   if (pendingRef.current) {
-    // Debounce in flight — check if URL changed externally
-    if (raw !== pendingRef.current.prevRaw) {
-      // URL changed externally during debounce — discard pending
+    // Debounce in flight — check if THIS key changed externally
+    if (encoded !== pendingRef.current.prevEncoded) {
+      // Our key changed externally during debounce — discard pending
       pendingRef.current = null
       debouncedWriteRef.current?.cancel()
       // Fall through to URL decode
@@ -351,14 +352,15 @@ export function useUrlState<T>(
 
       // Write to URL (debounced if configured)
       if (debouncedWriteRef.current) {
-        pendingRef.current = { decoded: newValue, prevRaw: strategy.getRaw() }
+        const prevEncoded = multiToSingle(strategy.parse()[key] ?? [])
+        pendingRef.current = { decoded: newValue, prevEncoded }
         debouncedWriteRef.current(newValue, newEncoded)
         forceUpdate()
       } else {
         writeToUrl(newValue, newEncoded)
       }
     },
-    [writeToUrl, strategy, forceUpdate]
+    [key, writeToUrl, strategy, forceUpdate]
   )
 
   // Round-trip classify the URL's current raw value. Recomputed on each
@@ -436,7 +438,9 @@ export function useUrlStates<P extends Record<string, Param<any>>>(
   // Pending values during debounce window
   const pendingRef = useRef<{
     values: Record<string, any>
-    prevRaw: string
+    // Each owned key's URL-encoded value when the debounce started; compared
+    // per-key (not whole-raw) so an unrelated external write doesn't discard it.
+    prevEncoded: Record<string, string | undefined>
   } | null>(null)
 
   // Debounced write ref (declared early so render code can reference it)
@@ -449,13 +453,14 @@ export function useUrlStates<P extends Record<string, Param<any>>>(
     getServerSnapshot
   )
 
-  const raw = strategy.getRaw()
-
   // Decode all values from URL with causality tracking
   let values: { [K in keyof P]: P[K] extends Param<infer T> ? T : never }
+  const ownKeyChanged = pendingRef.current
+    && Object.keys(params).some(key =>
+      multiToSingle(urlParams[key] ?? []) !== pendingRef.current!.prevEncoded[key])
   if (pendingRef.current) {
-    if (raw !== pendingRef.current.prevRaw) {
-      // URL changed externally during debounce — discard pending
+    if (ownKeyChanged) {
+      // One of our keys changed externally during debounce — discard pending
       pendingRef.current = null
       debouncedWriteRef.current?.cancel()
       lastWrittenRef.current = {}
@@ -565,7 +570,10 @@ export function useUrlStates<P extends Record<string, Param<any>>>(
         for (const [key, value] of Object.entries(updates)) {
           pendingValues[key] = value
         }
-        pendingRef.current = { values: pendingValues, prevRaw: strategy.getRaw() }
+        const parsed = strategy.parse()
+        const prevEncoded: Record<string, string | undefined> = {}
+        for (const k of Object.keys(params)) prevEncoded[k] = multiToSingle(parsed[k] ?? [])
+        pendingRef.current = { values: pendingValues, prevEncoded }
         debouncedWriteRef.current(encodedUpdates)
         forceUpdate()
       } else {
@@ -644,7 +652,7 @@ export function useMultiUrlState<T>(
 
   const pendingRef = useRef<{
     decoded: T
-    prevRaw: string
+    prevEncoded: MultiEncoded
   } | null>(null)
 
   const debouncedWriteRef = useRef<ReturnType<typeof debounce<(encoded: MultiEncoded) => void>> | null>(null)
@@ -656,11 +664,10 @@ export function useMultiUrlState<T>(
   )
 
   const encoded = urlParams[key] ?? []
-  const raw = strategy.getRaw()
 
   let value: T
   if (pendingRef.current) {
-    if (raw !== pendingRef.current.prevRaw) {
+    if (!arraysEqual(encoded, pendingRef.current.prevEncoded)) {
       pendingRef.current = null
       debouncedWriteRef.current?.cancel()
       value = param.decode(encoded)
@@ -722,14 +729,14 @@ export function useMultiUrlState<T>(
       lastWrittenRef.current = { encoded: newEncoded, decoded: newValue }
 
       if (debouncedWriteRef.current) {
-        pendingRef.current = { decoded: newValue, prevRaw: strategy.getRaw() }
+        pendingRef.current = { decoded: newValue, prevEncoded: strategy.parse()[key] ?? [] }
         debouncedWriteRef.current(newEncoded)
         forceUpdate()
       } else {
         writeToUrl(newEncoded)
       }
     },
-    [writeToUrl, strategy, forceUpdate]
+    [key, writeToUrl, strategy, forceUpdate]
   )
 
   return [value, setValue]
@@ -790,7 +797,7 @@ export function useMultiUrlStates<P extends Record<string, MultiParam<any>>>(
 
   const pendingRef = useRef<{
     values: Record<string, any>
-    prevRaw: string
+    prevEncoded: Record<string, MultiEncoded>
   } | null>(null)
 
   const debouncedWriteRef = useRef<ReturnType<typeof debounce<(updates: Record<string, MultiEncoded>) => void>> | null>(null)
@@ -801,11 +808,12 @@ export function useMultiUrlStates<P extends Record<string, MultiParam<any>>>(
     getServerSnapshot
   )
 
-  const raw = strategy.getRaw()
-
   let values: { [K in keyof P]: P[K] extends MultiParam<infer T> ? T : never }
+  const ownKeyChanged = pendingRef.current
+    && Object.keys(params).some(key =>
+      !arraysEqual(urlParams[key] ?? [], pendingRef.current!.prevEncoded[key] ?? []))
   if (pendingRef.current) {
-    if (raw !== pendingRef.current.prevRaw) {
+    if (ownKeyChanged) {
       pendingRef.current = null
       debouncedWriteRef.current?.cancel()
       lastWrittenRef.current = {}
@@ -906,7 +914,10 @@ export function useMultiUrlStates<P extends Record<string, MultiParam<any>>>(
         for (const [key, value] of Object.entries(updates)) {
           pendingValues[key] = value
         }
-        pendingRef.current = { values: pendingValues, prevRaw: strategy.getRaw() }
+        const parsed = strategy.parse()
+        const prevEncoded: Record<string, MultiEncoded> = {}
+        for (const k of Object.keys(params)) prevEncoded[k] = parsed[k] ?? []
+        pendingRef.current = { values: pendingValues, prevEncoded }
         debouncedWriteRef.current(encodedUpdates)
         forceUpdate()
       } else {

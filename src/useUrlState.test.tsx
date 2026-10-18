@@ -100,7 +100,7 @@ describe('useUrlState debounce', () => {
     expect(result.current[0]).toBe(50)
   })
 
-  it('external navigation during debounce discards pending value', () => {
+  it('external change to the SAME key during debounce discards pending value', () => {
     vi.useFakeTimers()
 
     const { result } = renderHook(() =>
@@ -113,23 +113,50 @@ describe('useUrlState debounce', () => {
     })
     expect(result.current[0]).toBe(99)
 
-    // External navigation (simulate back button or other code changing URL)
+    // External change to OUR key (e.g. back button to a URL that sets d=7)
+    act(() => {
+      window.history.replaceState({}, '', '/?d=7')
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+
+    // External change to our key wins — pending discarded, value is the URL's.
+    expect(result.current[0]).toBe(7)
+
+    // Advance past debounce — the pending write was discarded.
+    act(() => {
+      vi.advanceTimersByTime(600)
+    })
+    expect(window.location.search).toBe('?d=7')
+  })
+
+  it('external change to a DIFFERENT key during debounce keeps the pending value', () => {
+    // Per-key comparison: an unrelated write (another key, or the section
+    // spy's silent `?s=…`) must not discard our debounced value.
+    vi.useFakeTimers()
+
+    const { result } = renderHook(() =>
+      useUrlState('d', intParam(0), { debounce: 500 })
+    )
+
+    act(() => {
+      result.current[1](99)
+    })
+    expect(result.current[0]).toBe(99)
+
+    // External change to a DIFFERENT key — 'd' itself is untouched.
     act(() => {
       window.history.replaceState({}, '', '/?n=hello')
       window.dispatchEvent(new PopStateEvent('popstate'))
     })
 
-    // External change should win — value should reset to default (0)
-    // since 'd' is not in the new URL
-    expect(result.current[0]).toBe(0)
+    // Our key didn't change, so the pending value survives.
+    expect(result.current[0]).toBe(99)
 
-    // Advance past debounce — the pending write should have been discarded
+    // Advance past debounce — the pending write lands, preserving the other key.
     act(() => {
       vi.advanceTimersByTime(600)
     })
-
-    // URL should NOT contain d=99
-    expect(window.location.search).not.toContain('d=99')
+    expect(window.location.search).toBe('?n=hello&d=99')
   })
 
   it('non-debounced setValue works unchanged (regression)', () => {

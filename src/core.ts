@@ -84,12 +84,21 @@ const LOCATION_CHANGE_EVENT = 'use-prms:locationchange'
  * This enables automatic reactivity to all programmatic URL changes
  */
 let historyPatched = false
+// The unpatched History methods, captured before patching: writing through
+// these does NOT dispatch LOCATION_CHANGE_EVENT, so a caller can update the URL
+// without re-rendering every useUrlState consumer. The section spy
+// (`use-prms/sections`) uses them for its per-scroll-frame writes.
+let unpatchedPushState: History['pushState'] | null = null
+let unpatchedReplaceState: History['replaceState'] | null = null
+
 function patchHistoryApi(): void {
   if (typeof window === 'undefined' || historyPatched) return
   historyPatched = true
 
   const originalPushState = history.pushState.bind(history)
   const originalReplaceState = history.replaceState.bind(history)
+  unpatchedPushState = originalPushState
+  unpatchedReplaceState = originalReplaceState
 
   history.pushState = function(state, title, url) {
     originalPushState(state, title, url)
@@ -100,6 +109,23 @@ function patchHistoryApi(): void {
     originalReplaceState(state, title, url)
     window.dispatchEvent(new CustomEvent(LOCATION_CHANGE_EVENT))
   }
+}
+
+/**
+ * `history.replaceState` as captured before use-prms patched it: updates the
+ * URL WITHOUT dispatching `use-prms:locationchange`, so no useUrlState consumer
+ * re-renders. For the section spy's per-frame writes; a normal write should use
+ * `history.replaceState` (patched) so consumers stay in sync.
+ */
+export function silentReplaceState(data: unknown, unused: string, url?: string | URL | null): void {
+  if (unpatchedReplaceState) unpatchedReplaceState(data, unused, url)
+  else if (typeof window !== 'undefined') window.history.replaceState(data, unused, url)
+}
+
+/** `history.pushState` captured before patching — see {@link silentReplaceState}. */
+export function silentPushState(data: unknown, unused: string, url?: string | URL | null): void {
+  if (unpatchedPushState) unpatchedPushState(data, unused, url)
+  else if (typeof window !== 'undefined') window.history.pushState(data, unused, url)
 }
 
 // Patch on module load
