@@ -40,7 +40,8 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "test": "vitest",
-    "lint": "eslint src"
+    "lint": "eslint src",
+    "deploy": "wrangler deploy"
   },
   "keywords": [
     "url",
@@ -70,7 +71,8 @@
     "typescript": "^5.7.2",
     "typescript-eslint": "^8.71.2",
     "vitest": "^4.0.18",
-    "vue": "^3.5.44"
+    "vue": "^3.5.44",
+    "wrangler": "^4.151.1"
   },
   "peerDependencies": {
     "react": "^18.0.0 || ^19.0.0",

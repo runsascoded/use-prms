@@ -1,0 +1,25 @@
+{
+  // `use-prms` — the demo site, served as a Cloudflare Worker with Static
+  // Assets (no Worker script: assets-only). The built Vite SPA lives in
+  // `docs/` (produced by `pnpm -C site build`).
+  //
+  // Production (`prms.rbw.sh`) deploys from `main` via `.github/workflows/
+  // ci.yml`. Per-PR previews deploy `use-prms-pr-<n>` to `*.workers.dev` via
+  // `.github/workflows/preview.yml` (which generates its own throwaway config
+  // from this one — see `.github/scripts/preview-config.mjs`).
+  "name": "use-prms",
+  "compatibility_date": "2026-09-01",
+  // Personal account that owns the `rbw.sh` zone (same as jc-taxes). Account
+  // IDs aren't secret; only `CLOUDFLARE_API_TOKEN` is.
+  "account_id": "0dcad5654e9744de6616f74b8df4af63",
+  "assets": {
+    "directory": "./docs",
+    // Client-routed paths (/hash, /parity, deep links) fall back to
+    // index.html; real files (/vue.html, /assets/*) are served directly.
+    "not_found_handling": "single-page-application"
+  },
+  "observability": { "enabled": true }
+  // Production binds `prms.rbw.sh` as a custom domain (set once in the CF
+  // dashboard). No `routes` here — declaring them makes every deploy hit the
+  // workers-domains API; the preview config must stay domain-free regardless.
+}

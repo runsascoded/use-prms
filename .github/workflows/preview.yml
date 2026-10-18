@@ -1,0 +1,118 @@
+name: PR preview
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: 'PR number (approves its current head commit only)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: preview-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    if: github.event_name != 'issue_comment' || (github.event.issue.pull_request && startsWith(github.event.comment.body, '/preview'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    outputs:
+      sha: ${{ steps.gate.outputs.sha }}
+      pr: ${{ steps.gate.outputs.pr }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/github-script@v7
+        id: gate
+        with:
+          script: |
+            await require('./.github/scripts/preview-gate.cjs')({ github, context, core });
+      - name: Test trusted preview tooling
+        run: node --test .github/scripts/preview-gate.test.cjs
+
+  build:
+    needs: gate
+    if: needs.gate.outputs.sha != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Approved PR code executes here, on a runner WITHOUT CF credentials.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Build and test approved commit
+        run: |
+          pnpm install --no-frozen-lockfile
+          pnpm run build
+          pnpm run test
+          cd site
+          pnpm install --no-frozen-lockfile
+          pnpm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: preview-${{ needs.gate.outputs.pr }}-${{ needs.gate.outputs.sha }}
+          path: docs
+          retention-days: 3
+
+  deploy:
+    needs: [gate, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      # Trusted base code/config only; never install the PR's dependencies here.
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - uses: actions/download-artifact@v4
+        with:
+          name: preview-${{ needs.gate.outputs.pr }}-${{ needs.gate.outputs.sha }}
+          path: docs
+      - name: Install trusted deployment tools
+        run: pnpm install --frozen-lockfile
+      - name: Generate isolated preview configuration
+        env:
+          PR_NUMBER: ${{ needs.gate.outputs.pr }}
+        run: node .github/scripts/preview-config.mjs
+      - name: Deploy preview
+        id: deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          pnpm exec wrangler deploy --config preview.json | tee deploy.log
+          url=$(grep -oE 'https://[a-z0-9-]+\.workers\.dev' deploy.log | head -1)
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const number = Number('${{ needs.gate.outputs.pr }}');
+            const url = '${{ steps.deploy.outputs.url }}';
+            await github.rest.issues.createComment({ ...context.repo, issue_number: number,
+              body: `Preview of commit ${{ needs.gate.outputs.sha }}: ${url}\n\nProduction (prms.rbw.sh) is unchanged.` });

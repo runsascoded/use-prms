@@ -1,6 +1,6 @@
 # Cloudflare per-PR previews; move the demo off GitHub Pages
 
-**Status**: proposed (2026-10-18). Adopts the per-PR preview pattern [`jc-taxes`][jct] set up (`.github/workflows/preview.yml` + `preview-gate.cjs` + `preview-config.mjs`), adapted from a Worker app to use-prms' static Vite demo.
+**Status**: implemented (code) 2026-10-18 — all CI config + scripts landed and validated locally (`wrangler deploy --dry-run` on both configs, gate `node --test` green). Pending owner CF setup (see [Manual prerequisites](#manual-prerequisites)) + a first live deploy to verify, then → `specs/done/`. Adopts the per-PR preview pattern [`jc-taxes`][jct] set up (`.github/workflows/preview.yml` + `preview-gate.cjs` + `preview-config.mjs`), adapted from a Worker app to use-prms' static Vite demo.
 
 ## Why
 
@@ -31,7 +31,7 @@ A static-assets Worker (no `main` script):
 ```
 
 - `single-page-application` returns `index.html` for unmatched paths — so react-router routes (`/`, `/hash`, `/parity`) work — while real files (`/vue.html`, `/assets/*`) are served directly.
-- `account_id` is **not** committed; CI supplies `CLOUDFLARE_ACCOUNT_ID`. Prod binds `prms.rbw.sh` as a custom domain (set once in the CF dashboard, or add a `routes` entry once the zone is on CF).
+- `account_id` **is** committed (`0dcad…`, the personal account that owns the `rbw.sh` zone — same as jc-taxes; account ids aren't secret). So CI needs only `CLOUDFLARE_API_TOKEN`. Prod binds its custom domain (set once in the CF dashboard, or add a `routes` entry once the zone is on CF).
 - The old GH-Pages shims (`CNAME`, `404.html`) are dropped; CF handles the domain + SPA fallback.
 
 ## Workflows
@@ -42,13 +42,23 @@ A static-assets Worker (no `main` script):
   - **build** — checkout the approved SHA, `pnpm build` + `pnpm test` (lib) + `pnpm -C site build`, upload `docs/` as an artifact. **No CF creds in this job.**
   - **deploy** — checkout trusted `main`, download the artifact into `./docs`, generate `preview.json` via `scripts/preview-config.mjs` (`name: use-prms-pr-<n>`, `workers_dev: true`, same `assets`/`compatibility_date`/`observability`, nothing else), `wrangler deploy --config preview.json`, capture the printed `*.workers.dev` URL, and comment it on the PR.
 
-## Manual prerequisites (owner)
+## Manual prerequisites (owner) <a id="manual-prerequisites"></a>
 
-1. A Cloudflare account; create an API token (Workers Scripts: Edit) → add repo secret `CLOUDFLARE_API_TOKEN`.
-2. Add repo variable/secret `CLOUDFLARE_ACCOUNT_ID`.
-3. Point `prms.rbw.sh` at the `use-prms` Worker (CF custom domain) once, replacing the GH Pages CNAME. Disable the GH Pages site.
+1. Create a Cloudflare API token (Workers Scripts: Edit) on the account that owns `rbw.sh` → add repo secret `CLOUDFLARE_API_TOKEN`. (account_id is already in `wrangler.jsonc`.)
+2. **Pick the prod domain and bind it to the `use-prms` Worker** (CF dashboard → the Worker → custom domain). The old GH Pages CNAME was `prms.rbw.sh`, but the README links `use-prms.runsascoded.com` — decide which (or both) the Worker serves, and disable the GH Pages site.
 
-Until (1)–(2) exist, CI config is in place but the deploy/preview jobs can't run; everything else (lib, tests, e2e, `build-dist`, release) is unaffected.
+Until (1) exists, the CI config is in place but the deploy/preview jobs can't run; everything else (lib, tests, e2e, `build-dist`, release) is unaffected. First `main` push after (1) deploys to the workers.dev URL even before (2); the custom domain just makes it reachable at the friendly name.
+
+## Implementation notes
+
+Landed in CI without Pulumi, as decided:
+
+- `wrangler.jsonc` — assets-only Worker (`./docs`, SPA fallback), `account_id` committed, `observability` on. Validated with `wrangler deploy --dry-run` (reads 11 assets, no bindings).
+- `.github/scripts/preview-gate.cjs` + `preview-gate.test.cjs` — ported verbatim from jc-taxes (repo-agnostic via `context.repo`); 4 `node --test` cases green.
+- `.github/scripts/preview-config.mjs` — simplified for a static-assets Worker (no R2/D1): emits `use-prms-pr-<n>`, `workers_dev: true`, same `assets`/`compatibility_date`/`account_id`/`observability`, nothing else. Validated end-to-end (`PR_NUMBER=42 node … && wrangler deploy --config preview.json --dry-run`).
+- `.github/workflows/ci.yml` — dropped the GH Pages `deploy` job + CNAME/404 steps; added a main-only "Deploy Worker" step (`pnpm run deploy`). `build-dist` + `release` unchanged.
+- `.github/workflows/preview.yml` — gate → build (no creds) → deploy (from trusted `main`, wrangler deploy of the generated config, PR comment with the captured `*.workers.dev` URL).
+- `package.json` — `wrangler` devDep + `deploy` script.
 
 ## Done when
 
