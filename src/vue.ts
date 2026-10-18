@@ -24,6 +24,11 @@ import {
   type MultiCodec,
 } from './store.js'
 
+// Re-export the framework-free surface so a Vue app can import the codecs and
+// strategies from the same place as the composables
+// (`import { useUrlState, boolParam } from 'use-prms/vue'`).
+export * from './core.js'
+
 /** Options shared by all Vue URL-state composables. */
 export interface UseUrlStateOptions {
   /** Debounce URL writes in milliseconds (state updates immediately). */
