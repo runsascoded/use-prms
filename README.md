@@ -698,7 +698,7 @@ reflectUnknown()  // → [{ key, raw }]  (URL keys nothing registered)
 const { params, unknown } = useParamReflection()
 ```
 
-Each `ParamReflection` carries the param's live classification (`absent` / `canonical` / `stale` / `malformed`, the same axis as `classifyParam`), its decoded `value`, the `raw` URL value and the `canonical` form it would normalize to. For a whole-app catalogue of keys — including ones not currently mounted (they reflect with `refs: 0`) — register metadata once with `describeParams({ c: { label: 'Count', param: intParam(0) } })`; a live hook of the same key merges over it (the hook wins, the catalogue fills gaps). See the [demo](https://use-prms.runsascoded.com/#section-reflection) for a panel built entirely from this API.
+Each `ParamReflection` carries the param's live classification (`absent` / `canonical` / `stale` / `malformed`, the same axis as `classifyParam`), its decoded `value`, the `raw` URL value and the `canonical` form it would normalize to. For a whole-app catalogue of keys — including ones not currently mounted (they reflect with `refs: 0`) — register metadata once with `describeParams({ c: { label: 'Count', param: intParam(0) } })`; a live hook of the same key merges over it (the hook wins, the catalogue fills gaps). See the [demo](https://prms.rbw.sh/#section-reflection) for a panel built entirely from this API.
 
 ## Section Spy <a id="sections"></a>
 
@@ -726,7 +726,7 @@ What you get:
 - **Back/forward restore** — each history entry returns to where it was left.
 - **Param mode for dOGI** — the fragment never reaches the server, but `?s=diff` does, so a Cloudflare Worker can render a per-section `og:image`. Under `use-prms/hash` the section defaults to the query (`?s=diff#e&c=5`) so it stays server-visible.
 
-Helpers: `jumpToSection(id)` (scroll + name it), `sectionHref(id)` (a link / copy URL), `withoutSection(search)` (strip the section param), and `SectionLink` (a heading link: a plain click jumps, a modified / middle click opens natively). Fragment mode is refused under `use-prms/hash` (the fragment holds params) with a dev warning. See the [demo](https://use-prms.runsascoded.com/#section-sections).
+Helpers: `jumpToSection(id)` (scroll + name it), `sectionHref(id)` (a link / copy URL), `withoutSection(search)` (strip the section param), and `SectionLink` (a heading link: a plain click jumps, a modified / middle click opens natively). Fragment mode is refused under `use-prms/hash` (the fragment holds params) with a dev warning. See the [demo](https://prms.rbw.sh/#section-sections).
 
 ## Framework-Agnostic Core <a id="core"></a>
 
@@ -771,7 +771,7 @@ const { values, setValues } = useUrlStates({   // reactive object + batched sett
 - `useUrlStates` / `useMultiUrlStates` return `{ values, setValues }`, where `values` is a `reactive` object (two-way per key) and `setValues` batches several keys into one history entry.
 - Each composable holds its URL subscription for the component scope and tears it down via `onScopeDispose`.
 
-`vue` is an optional peer dependency. Live: the [Vue demo](https://use-prms.runsascoded.com/vue.html), byte-equal with the [React one](https://use-prms.runsascoded.com/parity).
+`vue` is an optional peer dependency. Live: the [Vue demo](https://prms.rbw.sh/vue), byte-equal with the [React one](https://prms.rbw.sh/parity).
 
 ## Hash Params <a id="hash"></a>
 
