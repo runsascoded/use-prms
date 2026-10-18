@@ -16,6 +16,11 @@
       "types": "./dist/hash.d.ts",
       "import": "./dist/hash.js",
       "require": "./dist/hash.cjs"
+    },
+    "./sections": {
+      "types": "./dist/sections.d.ts",
+      "import": "./dist/sections.js",
+      "require": "./dist/sections.cjs"
     }
   },
   "files": [
