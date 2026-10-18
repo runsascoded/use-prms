@@ -27,6 +27,9 @@ export {
   clearParams,
 } from './strategies.js'
 
+// Framework-free URL-state store (subscribe/snapshot + per-key bindings).
+export * from './store.js'
+
 // Codecs and param helpers.
 export * from './params.js'
 export * from './multiParams.js'
