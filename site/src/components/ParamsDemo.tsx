@@ -17,6 +17,7 @@ import {
 } from 'use-prms'
 import { FloatDemo } from './FloatDemo'
 import { MapDemo } from './MapDemo'
+import { useDemoSectionSpy, SectionSpyPanel, SectionTOC, type SpyMode } from './SectionSpy'
 
 const themes = ['light', 'dark', 'auto'] as const
 export type Theme = typeof themes[number]
@@ -265,6 +266,8 @@ export function ParamsDemo({
   const location = useLocation()
   const [activeKeys, setActiveKeys] = useState<string[]>([])
   const [urlHoverKeys, setUrlHoverKeys] = useState<string[] | null>(null)
+  const [spyMode, setSpyMode] = useState<SpyMode>('param')
+  useDemoSectionSpy(spyMode)
 
   // Combined active keys from section hover and URL hover, expanded to include grouped keys
   const combinedActiveKeys = expandKeyGroups(urlHoverKeys ?? activeKeys)
@@ -387,6 +390,9 @@ export function ParamsDemo({
       <UrlDisplay search={search} activeKeys={combinedActiveKeys} onReset={handleReset} mode={mode} onHoverKey={setUrlHoverKeys} />
 
       <ReflectionPanel mode={mode} onHoverKey={setUrlHoverKeys} />
+
+      <SectionTOC />
+      <SectionSpyPanel spyMode={spyMode} setSpyMode={setSpyMode} pageMode={mode} />
 
       {/* Boolean */}
       <section id="section-boolean" className="section" style={getSectionStyle(['e'])} onMouseEnter={activate('e')} onMouseLeave={deactivate}>

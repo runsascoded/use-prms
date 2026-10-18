@@ -15,7 +15,7 @@ export default defineConfig({
   // entry points stay separate bundles, preserving their per-entry default
   // strategy (query vs. hash).
   optimizeDeps: {
-    exclude: ['use-prms', 'use-prms/hash'],
+    exclude: ['use-prms', 'use-prms/hash', 'use-prms/sections'],
   },
   build: {
     outDir: '../docs',
