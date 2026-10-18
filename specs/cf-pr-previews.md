@@ -1,6 +1,14 @@
 # Cloudflare per-PR previews; move the demo off GitHub Pages
 
-**Status**: implemented (code) 2026-10-18 — all CI config + scripts landed and validated locally (`wrangler deploy --dry-run` on both configs, gate `node --test` green). Pending owner CF setup (see [Manual prerequisites](#manual-prerequisites)) + a first live deploy to verify, then → `specs/done/`. Adopts the per-PR preview pattern [`jc-taxes`][jct] set up (`.github/workflows/preview.yml` + `preview-gate.cjs` + `preview-config.mjs`), adapted from a Worker app to use-prms' static Vite demo.
+**Status**: deployed & verified live 2026-10-18. Prod runs at `https://use-prms.ryan-0dc.workers.dev` (all routes 200; `/vue.html` → `/vue`); a `/preview` on PR #1 produced a live `https://use-prms-pr-1.ryan-0dc.workers.dev`. Only remaining owner step: bind the custom domain + disable GH Pages (see [Manual prerequisites](#manual-prerequisites)) — then this moves to `specs/done/`. Adopts the per-PR preview pattern [`jc-taxes`][jct] set up (`.github/workflows/preview.yml` + `preview-gate.cjs` + `preview-config.mjs`), adapted from a Worker app to use-prms' static Vite demo.
+
+### Fixes found on first live run (the preview/section CI had never run before — those commits were held)
+
+- `pnpm test` (vitest) collected the `node:test` gate file → excluded `.github/**` in `vitest.config.ts`.
+- Wrangler 4 requires Node ≥ 22; workflows pinned 20 → bumped `setup-node` to 22.
+- Preview URL capture regex missed the dotted subdomain (`use-prms-pr-<n>.<sub>.workers.dev`) → allow dots.
+- The `sections` back/forward scroll-restore e2e fails in headless CI (no WebGL → map-less page too short, restore lands at ~86) → `test.skip` on CI; validated locally + `nav.ts` unit-tested. Candidate follow-up: a map-free fixture page so it can run on CI.
+- Known gap: no auto-teardown of preview Workers on PR close (a `pull_request_target: closed` → `wrangler delete use-prms-pr-<n>` job). `use-prms-pr-1` is still up from the smoke test.
 
 ## Why
 
