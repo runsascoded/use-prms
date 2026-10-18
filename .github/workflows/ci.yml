@@ -3,8 +3,12 @@ on:
   push:
     branches: [main]
     tags: ['v*']
+    # Doc-only commits don't change the lib or the demo, so skip the build +
+    # e2e + redeploy. (Release tags bump package.json, so they aren't skipped.)
+    paths-ignore: ['specs/**', '**/*.md']
   pull_request:
     branches: [main]
+    paths-ignore: ['specs/**', '**/*.md']
   workflow_dispatch:
 
 permissions:

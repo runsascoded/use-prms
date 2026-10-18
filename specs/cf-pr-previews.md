@@ -7,8 +7,9 @@
 - `pnpm test` (vitest) collected the `node:test` gate file → excluded `.github/**` in `vitest.config.ts`.
 - Wrangler 4 requires Node ≥ 22; workflows pinned 20 → bumped `setup-node` to 22.
 - Preview URL capture regex missed the dotted subdomain (`use-prms-pr-<n>.<sub>.workers.dev`) → allow dots.
-- The `sections` back/forward scroll-restore e2e fails in headless CI (no WebGL → map-less page too short, restore lands at ~86) → `test.skip` on CI; validated locally + `nav.ts` unit-tested. Candidate follow-up: a map-free fixture page so it can run on CI.
-- Known gap: no auto-teardown of preview Workers on PR close (a `pull_request_target: closed` → `wrangler delete use-prms-pr-<n>` job). `use-prms-pr-1` is still up from the smoke test.
+- The `sections` back/forward scroll-restore e2e fails in headless CI (no WebGL → map-less page too short, restore lands at ~86) → `test.skip` on CI; validated locally + `nav.ts` unit-tested. **Deferred follow-up**: a static, map-free fixture route so it can run on CI (a good first dog-food of the preview flow).
+- Preview teardown: a `pull_request_target: closed` → `wrangler delete use-prms-pr-<n>` job now runs on PR close (added 2026-10-18). `use-prms-pr-1` from the first smoke test predates it and lingers until manually deleted.
+- Doc-only commits (`specs/**`, `**/*.md`) are `paths-ignore`d in `ci.yml` so they don't rerun e2e / redeploy.
 
 ## Why
 

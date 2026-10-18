@@ -1,7 +1,7 @@
 name: PR preview
 on:
   pull_request_target:
-    types: [opened, reopened, synchronize, ready_for_review]
+    types: [opened, reopened, synchronize, ready_for_review, closed]
   issue_comment:
     types: [created]
   workflow_dispatch:
@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   gate:
-    if: github.event_name != 'issue_comment' || (github.event.issue.pull_request && startsWith(github.event.comment.body, '/preview'))
+    if: github.event.action != 'closed' && (github.event_name != 'issue_comment' || (github.event.issue.pull_request && startsWith(github.event.comment.body, '/preview')))
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -116,3 +116,36 @@ jobs:
             const url = '${{ steps.deploy.outputs.url }}';
             await github.rest.issues.createComment({ ...context.repo, issue_number: number,
               body: `Preview of commit ${{ needs.gate.outputs.sha }}: ${url}\n\nProduction (prms.rbw.sh) is unchanged.` });
+
+  # Tear the preview Worker down when its PR closes (merged or not), so
+  # `use-prms-pr-<n>` workers don't accumulate. Trusted base checkout only.
+  teardown:
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install trusted deployment tools
+        run: pnpm install --frozen-lockfile
+      - name: Delete preview Worker
+        continue-on-error: true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: pnpm exec wrangler delete --name "use-prms-pr-${{ github.event.pull_request.number }}"
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({ ...context.repo, issue_number: ${{ github.event.pull_request.number }},
+              body: `Preview Worker \`use-prms-pr-${{ github.event.pull_request.number }}\` torn down.` });
