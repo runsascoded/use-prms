@@ -1,6 +1,6 @@
 {
   "name": "use-prms",
-  "version": "0.5.0-dist.86d4c15",
+  "version": "0.5.0-dist.462f8c2",
   "main": "./index.cjs",
   "module": "./index.js",
   "types": "./index.d.ts",
@@ -10,14 +10,30 @@
       "import": "./index.js",
       "require": "./index.cjs"
     },
+    "./core": {
+      "types": "./core.d.ts",
+      "import": "./core.js",
+      "require": "./core.cjs"
+    },
+    "./vue": {
+      "types": "./vue.d.ts",
+      "import": "./vue.js",
+      "require": "./vue.cjs"
+    },
     "./hash": {
       "types": "./hash.d.ts",
       "import": "./hash.js",
       "require": "./hash.cjs"
+    },
+    "./sections": {
+      "types": "./sections.d.ts",
+      "import": "./sections.js",
+      "require": "./sections.cjs"
     }
   },
   "peerDependencies": {
-    "react": "^18.0.0 || ^19.0.0"
+    "react": "^18.0.0 || ^19.0.0",
+    "vue": "^3.3.0"
   },
   "description": "Type-safe URL-parameter (query and hash) management with minimal, human-readable encoding and decoding",
   "keywords": [

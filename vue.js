@@ -1,0 +1,1971 @@
+import { reactive, onScopeDispose, customRef } from 'vue';
+
+// src/vue.ts
+
+// src/strategies.ts
+function parseMultiParams(source) {
+  const searchParams = typeof source === "string" ? new URLSearchParams(source) : source;
+  const result = {};
+  const keys = new Set(searchParams.keys());
+  for (const key of keys) {
+    result[key] = searchParams.getAll(key);
+  }
+  return result;
+}
+function serializeMultiParams(params) {
+  const searchParams = new URLSearchParams();
+  for (const [key, values] of Object.entries(params)) {
+    for (const value of values) {
+      if (value === "") {
+        continue;
+      }
+      searchParams.append(key, value);
+    }
+  }
+  let result = searchParams.toString();
+  const valuelessKeys = Object.entries(params).filter(([_, values]) => values.includes("")).map(([key, _]) => encodeURIComponent(key));
+  if (valuelessKeys.length > 0) {
+    const valuelessPart = valuelessKeys.join("&");
+    result = result ? `${result}&${valuelessPart}` : valuelessPart;
+  }
+  return result;
+}
+var LOCATION_CHANGE_EVENT = "use-prms:locationchange";
+var historyPatched = false;
+function patchHistoryApi() {
+  if (typeof window === "undefined" || historyPatched) return;
+  historyPatched = true;
+  const originalPushState = history.pushState.bind(history);
+  const originalReplaceState = history.replaceState.bind(history);
+  history.pushState = function(state, title, url) {
+    originalPushState(state, title, url);
+    window.dispatchEvent(new CustomEvent(LOCATION_CHANGE_EVENT));
+  };
+  history.replaceState = function(state, title, url) {
+    originalReplaceState(state, title, url);
+    window.dispatchEvent(new CustomEvent(LOCATION_CHANGE_EVENT));
+  };
+}
+patchHistoryApi();
+var queryStrategy = {
+  getRaw() {
+    if (typeof window === "undefined") return "";
+    return window.location.search;
+  },
+  parse() {
+    if (typeof window === "undefined") return {};
+    return parseMultiParams(window.location.search);
+  },
+  buildUrl(base, params) {
+    base.search = serializeMultiParams(params);
+    return base.toString();
+  },
+  subscribe(callback) {
+    if (typeof window === "undefined") return () => {
+    };
+    window.addEventListener("popstate", callback);
+    window.addEventListener(LOCATION_CHANGE_EVENT, callback);
+    return () => {
+      window.removeEventListener("popstate", callback);
+      window.removeEventListener(LOCATION_CHANGE_EVENT, callback);
+    };
+  }
+};
+var hashStrategy = {
+  getRaw() {
+    if (typeof window === "undefined") return "";
+    return window.location.hash;
+  },
+  parse() {
+    if (typeof window === "undefined") return {};
+    const hash = window.location.hash;
+    const hashString = hash.startsWith("#") ? hash.slice(1) : hash;
+    return parseMultiParams(hashString);
+  },
+  buildUrl(base, params) {
+    base.hash = serializeMultiParams(params);
+    return base.toString();
+  },
+  subscribe(callback) {
+    if (typeof window === "undefined") return () => {
+    };
+    window.addEventListener("hashchange", callback);
+    window.addEventListener("popstate", callback);
+    window.addEventListener(LOCATION_CHANGE_EVENT, callback);
+    return () => {
+      window.removeEventListener("hashchange", callback);
+      window.removeEventListener("popstate", callback);
+      window.removeEventListener(LOCATION_CHANGE_EVENT, callback);
+    };
+  }
+};
+function notifyLocationChange() {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(LOCATION_CHANGE_EVENT));
+}
+function clearParams(strategy = "query") {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  if (strategy === "hash") {
+    url.hash = "";
+  } else {
+    url.search = "";
+  }
+  window.history.replaceState({ ...window.history.state }, "", url.toString());
+  window.dispatchEvent(new PopStateEvent("popstate"));
+}
+var defaultStrategy = queryStrategy;
+function getDefaultStrategy() {
+  return defaultStrategy;
+}
+function setDefaultStrategy(strategy) {
+  defaultStrategy = strategy;
+}
+
+// src/store.ts
+function singleToMulti(encoded) {
+  if (encoded === void 0) return [];
+  return [encoded];
+}
+function multiToSingle(multi) {
+  if (multi.length === 0) return void 0;
+  return multi[0];
+}
+function toMultiCodec(param) {
+  return {
+    encode: (value) => singleToMulti(param.encode(value)),
+    decode: (encoded) => param.decode(multiToSingle(encoded))
+  };
+}
+function multiCodec(param) {
+  return param;
+}
+function arraysEqual(a, b) {
+  return a.length === b.length && a.every((v, i) => v === b[i]);
+}
+function debounce(fn, ms2) {
+  let timeoutId = null;
+  const debounced = ((...args) => {
+    if (timeoutId) clearTimeout(timeoutId);
+    timeoutId = setTimeout(() => {
+      timeoutId = null;
+      fn(...args);
+    }, ms2);
+  });
+  debounced.cancel = () => {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      timeoutId = null;
+    }
+  };
+  return debounced;
+}
+var snapshotCache = /* @__PURE__ */ new WeakMap();
+function getUrlSnapshot(strategy) {
+  const raw = strategy.getRaw();
+  const cached = snapshotCache.get(strategy);
+  if (cached && cached.raw === raw) return cached.snapshot;
+  const snapshot = strategy.parse();
+  snapshotCache.set(strategy, { raw, snapshot });
+  return snapshot;
+}
+function getServerSnapshot() {
+  return {};
+}
+function writeParams(strategy, updates, options = {}) {
+  if (typeof window === "undefined") return;
+  const currentParams = strategy.parse();
+  for (const [key, encoded] of Object.entries(updates)) {
+    if (encoded.length === 0) {
+      delete currentParams[key];
+    } else {
+      currentParams[key] = encoded;
+    }
+  }
+  const url = new URL(window.location.href);
+  const newUrl = strategy.buildUrl(url, currentParams);
+  const method = options.push ? "pushState" : "replaceState";
+  window.history[method]({ ...window.history.state }, "", newUrl);
+  window.dispatchEvent(new PopStateEvent("popstate"));
+}
+var UrlBinding = class {
+  constructor(strategy, onChange) {
+    this.strategy = strategy;
+    this.onChange = onChange;
+    this.codecs = {};
+    this.push = false;
+    this.debounceMs = 0;
+    this.debounced = null;
+    this.lastWritten = {};
+    this.pending = null;
+    this.decodeCache = {};
+  }
+  /** Replace the live key → codec map (called each render; cheap). */
+  setCodecs(codecs) {
+    this.codecs = codecs;
+  }
+  /** Set the write method used by subsequent writes. */
+  setPush(push) {
+    this.push = push;
+  }
+  /**
+   * Create/replace or tear down the debounce timer for `ms`. A no-op when `ms`
+   * is unchanged. Call from an effect; returns nothing.
+   */
+  setDebounce(ms2) {
+    if (ms2 === this.debounceMs && ms2 === 0 === (this.debounced === null)) return;
+    this.debounceMs = ms2;
+    this.debounced?.cancel();
+    this.debounced = ms2 > 0 ? debounce((updates) => {
+      writeParams(this.strategy, updates, { push: this.push });
+      this.pending = null;
+    }, ms2) : null;
+  }
+  decode(key, encoded) {
+    const codec = this.codecs[key];
+    const cached = this.decodeCache[key];
+    if (cached && cached.codec === codec && arraysEqual(cached.encoded, encoded)) {
+      return cached.decoded;
+    }
+    const decoded = codec.decode(encoded);
+    this.decodeCache[key] = { encoded, codec, decoded };
+    return decoded;
+  }
+  /**
+   * The decoded value for every owned key, given the live `snapshot`. May
+   * discard a stale pending value (if one of our keys changed externally) as a
+   * side-effect — matching the original hooks' render-time bookkeeping.
+   */
+  read(snapshot) {
+    const keys = Object.keys(this.codecs);
+    const encOf = (k) => snapshot[k] ?? [];
+    if (this.pending) {
+      const ownKeyChanged = keys.some((k) => !arraysEqual(encOf(k), this.pending.prevEncoded[k] ?? []));
+      if (ownKeyChanged) {
+        this.pending = null;
+        this.debounced?.cancel();
+        this.lastWritten = {};
+        return Object.fromEntries(keys.map((k) => [k, this.decode(k, encOf(k))]));
+      }
+      return Object.fromEntries(keys.map((k) => {
+        if (k in this.pending.values) return [k, this.pending.values[k]];
+        const encoded = encOf(k);
+        const lw = this.lastWritten[k];
+        if (lw && arraysEqual(lw.encoded, encoded)) return [k, lw.decoded];
+        return [k, this.decode(k, encoded)];
+      }));
+    }
+    return Object.fromEntries(keys.map((k) => {
+      const encoded = encOf(k);
+      const lw = this.lastWritten[k];
+      if (lw && arraysEqual(lw.encoded, encoded)) {
+        return [k, lw.decoded];
+      }
+      delete this.lastWritten[k];
+      return [k, this.decode(k, encoded)];
+    }));
+  }
+  /**
+   * Write `values` (a partial map of owned keys). Batched into one history
+   * entry; debounced if a debounce timer is active.
+   */
+  write(values) {
+    const encodedUpdates = {};
+    for (const [key, value] of Object.entries(values)) {
+      const codec = this.codecs[key];
+      if (!codec) continue;
+      const encoded = codec.encode(value);
+      encodedUpdates[key] = encoded;
+      this.lastWritten[key] = { encoded, decoded: value };
+    }
+    if (this.debounced) {
+      const pendingValues = { ...this.pending?.values ?? {} };
+      for (const [key, value] of Object.entries(values)) pendingValues[key] = value;
+      const parsed = this.strategy.parse();
+      const prevEncoded = {};
+      for (const k of Object.keys(this.codecs)) prevEncoded[k] = parsed[k] ?? [];
+      this.pending = { values: pendingValues, prevEncoded };
+      this.debounced(encodedUpdates);
+      this.onChange();
+    } else {
+      writeParams(this.strategy, encodedUpdates, { push: this.push });
+    }
+  }
+  /** Cancel any in-flight debounced write. Call on unmount. */
+  dispose() {
+    this.debounced?.cancel();
+  }
+};
+
+// src/params.ts
+function stringParam(init) {
+  return {
+    encode: (value) => value === init ? void 0 : value,
+    decode: (encoded) => encoded === void 0 ? init : encoded
+  };
+}
+function defStringParam(init) {
+  return {
+    encode: (value) => value === init ? void 0 : value,
+    decode: (encoded) => encoded ?? init
+  };
+}
+var boolParam = {
+  encode: (value) => value ? "" : void 0,
+  decode: (encoded) => encoded !== void 0
+};
+function intParam(init) {
+  return {
+    encode: (value) => value === init ? void 0 : value.toString(),
+    decode: (encoded) => {
+      if (encoded === void 0 || encoded === "") return init;
+      const parsed = parseInt(encoded, 10);
+      return isNaN(parsed) ? init : parsed;
+    }
+  };
+}
+var optIntParam = {
+  encode: (value) => value === null ? void 0 : value.toString(),
+  decode: (encoded) => {
+    if (encoded === void 0 || encoded === "") return null;
+    const parsed = parseInt(encoded, 10);
+    return isNaN(parsed) ? null : parsed;
+  }
+};
+function enumParam(init, values) {
+  const validSet = new Set(values);
+  return {
+    encode: (value) => {
+      if (!validSet.has(value)) {
+        console.warn(`Invalid enum value: ${value}, expected one of ${values.join(", ")}`);
+        return void 0;
+      }
+      return value === init ? void 0 : value;
+    },
+    decode: (encoded) => {
+      if (encoded === void 0) return init;
+      if (!validSet.has(encoded)) {
+        console.warn(`Invalid enum value: ${encoded}, expected one of ${values.join(", ")}. Using default: ${init}`);
+        return init;
+      }
+      return encoded;
+    }
+  };
+}
+function stringsParam(init = [], delimiter = " ") {
+  const initEncoded = init.join(delimiter);
+  return {
+    encode: (values) => {
+      const encoded = values.join(delimiter);
+      if (encoded === initEncoded) return void 0;
+      return encoded;
+    },
+    decode: (encoded) => {
+      if (encoded === void 0) return init;
+      if (encoded === "") return [];
+      return encoded.split(delimiter);
+    }
+  };
+}
+function numberArrayParam(init = []) {
+  const isEqual = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+  return {
+    encode: (values) => {
+      if (isEqual(values, init)) return void 0;
+      return values.map((v) => v.toString()).join(",");
+    },
+    decode: (encoded) => {
+      if (encoded === void 0) return init;
+      if (encoded === "") return [];
+      return encoded.split(",").map((v) => parseFloat(v));
+    }
+  };
+}
+function paginationParam(defaultPageSize, validPageSizes) {
+  return {
+    encode: ({ offset, pageSize }) => {
+      if (offset === 0 && pageSize === defaultPageSize) return void 0;
+      if (offset === 0) return ` ${pageSize}`;
+      if (pageSize === defaultPageSize) return String(offset);
+      return `${offset} ${pageSize}`;
+    },
+    decode: (encoded) => {
+      if (!encoded) return { offset: 0, pageSize: defaultPageSize };
+      const parts = encoded.split(" ");
+      const offset = parts[0] === "" ? 0 : parseInt(parts[0], 10) || 0;
+      let pageSize = parts[1] ? parseInt(parts[1], 10) : defaultPageSize;
+      if (validPageSizes && !validPageSizes.includes(pageSize)) {
+        pageSize = defaultPageSize;
+      }
+      return { offset, pageSize };
+    }
+  };
+}
+function normalizeCodeMap(codeMap) {
+  if (Array.isArray(codeMap)) return codeMap;
+  return Object.entries(codeMap);
+}
+function codeParam(init, codeMap) {
+  const entries = normalizeCodeMap(codeMap);
+  const valueToCode = new Map(entries);
+  const codeToValue = new Map(entries.map(([v, c]) => [c, v]));
+  return {
+    encode: (value) => {
+      if (value === init) return void 0;
+      return valueToCode.get(value) ?? value;
+    },
+    decode: (encoded) => {
+      if (encoded === void 0) return init;
+      return codeToValue.get(encoded) ?? init;
+    }
+  };
+}
+function codesParam(allValues, codeMap, separator = "") {
+  const entries = normalizeCodeMap(codeMap);
+  const valueToCode = new Map(entries);
+  const codeToValue = new Map(entries.map(([v, c]) => [c, v]));
+  return {
+    encode: (values) => {
+      if (values.length === allValues.length && allValues.every((v) => values.includes(v))) {
+        return void 0;
+      }
+      return values.map((v) => valueToCode.get(v) ?? v).join(separator);
+    },
+    decode: (encoded) => {
+      if (encoded === void 0) return [...allValues];
+      if (encoded === "") return [];
+      const codes = separator ? encoded.split(separator) : encoded.split("");
+      return codes.map((c) => codeToValue.get(c)).filter((v) => v !== void 0);
+    }
+  };
+}
+
+// src/multiParams.ts
+function multiStringParam(init = []) {
+  return {
+    encode: (values) => {
+      if (values.length === 0 && init.length === 0) return [];
+      if (arraysEqual2(values, init)) return [];
+      return values;
+    },
+    decode: (encoded) => {
+      if (encoded.length === 0) return init;
+      return encoded;
+    }
+  };
+}
+function multiIntParam(init = []) {
+  return {
+    encode: (values) => {
+      if (values.length === 0 && init.length === 0) return [];
+      if (arraysEqual2(values, init)) return [];
+      return values.map((v) => v.toString());
+    },
+    decode: (encoded) => {
+      if (encoded.length === 0) return init;
+      return encoded.map((v) => parseInt(v, 10));
+    }
+  };
+}
+function multiFloatParam(init = []) {
+  return {
+    encode: (values) => {
+      if (values.length === 0 && init.length === 0) return [];
+      if (arraysEqual2(values, init)) return [];
+      return values.map((v) => v.toString());
+    },
+    decode: (encoded) => {
+      if (encoded.length === 0) return init;
+      return encoded.map((v) => parseFloat(v));
+    }
+  };
+}
+function arraysEqual2(a, b) {
+  return a.length === b.length && a.every((v, i) => v === b[i]);
+}
+
+// src/flagPack.ts
+function validateSpec(spec) {
+  const seen = /* @__PURE__ */ new Set();
+  for (const letter of Object.keys(spec)) {
+    if (letter.length === 0) {
+      throw new Error("flagPackParam: flag name must be non-empty");
+    }
+    if (seen.has(letter)) {
+      throw new Error(`flagPackParam: duplicate flag ${JSON.stringify(letter)}`);
+    }
+    seen.add(letter);
+  }
+}
+function flagPackParam(spec) {
+  validateSpec(spec);
+  const orderedKeys = Object.keys(spec);
+  const known = new Set(orderedKeys);
+  const defaults = { ...spec };
+  return {
+    encode(values) {
+      const parts = [];
+      for (const key of orderedKeys) {
+        if (values[key] !== spec[key]) parts.push(key);
+      }
+      if (parts.length === 0) return void 0;
+      return parts.join("");
+    },
+    decode(encoded) {
+      const out = { ...defaults };
+      if (!encoded) return out;
+      const sortedByLen = [...orderedKeys].sort((a, b) => b.length - a.length);
+      let i = 0;
+      while (i < encoded.length) {
+        let matched = null;
+        for (const k of sortedByLen) {
+          if (encoded.startsWith(k, i)) {
+            matched = k;
+            break;
+          }
+        }
+        if (matched && known.has(matched)) {
+          out[matched] = !spec[matched];
+          i += matched.length;
+        } else {
+          i += 1;
+        }
+      }
+      return out;
+    }
+  };
+}
+
+// src/alphabet.ts
+var ALPHABETS = {
+  /**
+   * RFC 4648 base64url alphabet (default)
+   * Standard URL-safe encoding, but NOT lexicographically sortable.
+   */
+  rfc4648: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_",
+  /**
+   * ASCII-ordered alphabet for lexicographic sortability
+   * Encoded strings sort in the same order as their numeric values.
+   * Uses URL-safe characters only (- and _).
+   */
+  sortable: "-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz"
+};
+var URL_SAFE_CHARS = /^[A-Za-z0-9\-_]+$/;
+function validateAlphabet(alphabet) {
+  if (alphabet.length !== 64) {
+    throw new Error(`Alphabet must be exactly 64 characters, got ${alphabet.length}`);
+  }
+  const seen = /* @__PURE__ */ new Set();
+  for (const char of alphabet) {
+    if (seen.has(char)) {
+      throw new Error(`Duplicate character in alphabet: '${char}'`);
+    }
+    seen.add(char);
+  }
+  if (!URL_SAFE_CHARS.test(alphabet)) {
+    const unsafe = [...alphabet].filter((c) => !URL_SAFE_CHARS.test(c));
+    throw new Error(`Alphabet contains non-URL-safe characters: ${unsafe.map((c) => `'${c}'`).join(", ")}`);
+  }
+}
+function resolveAlphabet(alphabet) {
+  if (alphabet in ALPHABETS) {
+    return ALPHABETS[alphabet];
+  }
+  validateAlphabet(alphabet);
+  return alphabet;
+}
+function createLookupMap(alphabet) {
+  return new Map(alphabet.split("").map((c, i) => [c, i]));
+}
+
+// src/binary.ts
+var BASE64_CHARS = ALPHABETS.rfc4648;
+var DEFAULT_LOOKUP = createLookupMap(ALPHABETS.rfc4648);
+var lookupCache = /* @__PURE__ */ new Map();
+function getLookupMap(alphabet) {
+  if (alphabet === ALPHABETS.rfc4648) return DEFAULT_LOOKUP;
+  let lookup = lookupCache.get(alphabet);
+  if (!lookup) {
+    lookup = createLookupMap(alphabet);
+    lookupCache.set(alphabet, lookup);
+  }
+  return lookup;
+}
+function base64Encode(bytes, options) {
+  const chars = options?.alphabet ? resolveAlphabet(options.alphabet) : ALPHABETS.rfc4648;
+  let result = "";
+  let i = 0;
+  while (i < bytes.length) {
+    const b0 = bytes[i++] ?? 0;
+    const b1 = bytes[i++] ?? 0;
+    const b2 = bytes[i++] ?? 0;
+    const n = b0 << 16 | b1 << 8 | b2;
+    result += chars[n >> 18 & 63];
+    result += chars[n >> 12 & 63];
+    if (i - 2 < bytes.length) {
+      result += chars[n >> 6 & 63];
+    }
+    if (i - 1 < bytes.length) {
+      result += chars[n & 63];
+    }
+  }
+  return result;
+}
+function base64Decode(str, options) {
+  const alphabet = options?.alphabet ? resolveAlphabet(options.alphabet) : ALPHABETS.rfc4648;
+  const lookup = getLookupMap(alphabet);
+  str = str.replace(/=+$/, "");
+  const bytes = [];
+  for (let i = 0; i < str.length; i += 4) {
+    const c0 = lookup.get(str[i]) ?? 0;
+    const c1 = lookup.get(str[i + 1]) ?? 0;
+    const c2 = i + 2 < str.length ? lookup.get(str[i + 2]) ?? 0 : 0;
+    const c3 = i + 3 < str.length ? lookup.get(str[i + 3]) ?? 0 : 0;
+    const n = c0 << 18 | c1 << 12 | c2 << 6 | c3;
+    bytes.push(n >> 16 & 255);
+    if (i + 2 < str.length) bytes.push(n >> 8 & 255);
+    if (i + 3 < str.length) bytes.push(n & 255);
+  }
+  return new Uint8Array(bytes);
+}
+function binaryParam(options) {
+  const { toBytes, fromBytes, alphabet } = options;
+  const encodeOpts = alphabet ? { alphabet } : void 0;
+  return {
+    encode: (value) => {
+      if (value === null) return void 0;
+      const bytes = toBytes(value);
+      if (bytes.length === 0) return void 0;
+      return base64Encode(bytes, encodeOpts);
+    },
+    decode: (encoded) => {
+      if (encoded === void 0 || encoded === "") return null;
+      try {
+        const bytes = base64Decode(encoded, encodeOpts);
+        return fromBytes(bytes);
+      } catch {
+        return null;
+      }
+    }
+  };
+}
+function base64Param(toBytes, fromBytes, alphabet) {
+  return binaryParam({ toBytes, fromBytes, alphabet });
+}
+function floatToBytes(value) {
+  const buf = new ArrayBuffer(8);
+  const view = new DataView(buf);
+  view.setFloat64(0, value, false);
+  return new Uint8Array(buf);
+}
+function bytesToFloat(bytes) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return view.getFloat64(0, false);
+}
+
+// src/dates.ts
+var DAY_MS = 864e5;
+var TOKEN = /^(?:(\d{2}|\d{4}|\d{6}|\d{8})-(\d{2}|\d{4}|\d{6}|\d{8})|(\d{2}|\d{4}|\d{6}|\d{8})-|-(\d{2}|\d{4}|\d{6}|\d{8})|(\d{2}|\d{4}|\d{6}|\d{8}))$/;
+function ms(date) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(date) ? Date.parse(`${date}T00:00:00Z`) : NaN;
+}
+function iso(t) {
+  return new Date(t).toISOString().slice(0, 10);
+}
+function expand(token, prev) {
+  const full = token.length === 8 ? token : token.length === 6 ? `20${token}` : prev === null ? null : prev.replace(/-/g, "").slice(0, 8 - token.length) + token;
+  if (full === null) return null;
+  const date = `${full.slice(0, 4)}-${full.slice(4, 6)}-${full.slice(6)}`;
+  const t = ms(date);
+  return !isNaN(t) && iso(t) === date ? date : null;
+}
+function contract(date, prev) {
+  const d = date.replace(/-/g, "");
+  if (prev === null) return d.startsWith("20") ? d.slice(2) : d;
+  const p = prev.replace(/-/g, "");
+  if (p.slice(0, 6) === d.slice(0, 6)) return d.slice(6);
+  if (p.slice(0, 4) === d.slice(0, 4)) return d.slice(4);
+  return d.startsWith("20") ? d.slice(2) : d;
+}
+function resolve(d) {
+  const v = typeof d === "function" ? d() : d;
+  return v !== void 0 && !isNaN(ms(v)) ? v : void 0;
+}
+function encodeDates(dates, options = {}) {
+  const sorted = [...new Set(dates)].map(ms).filter((t) => !isNaN(t)).sort((a, b) => a - b);
+  if (!sorted.length) return void 0;
+  const runs = [];
+  for (const t of sorted) {
+    const last = runs[runs.length - 1];
+    if (last && t === last[1] + DAY_MS) last[1] = t;
+    else runs.push([t, t]);
+  }
+  const latest = resolve(options.latest);
+  const genesis = resolve(options.genesis);
+  const latestMs = latest !== void 0 ? ms(latest) : void 0;
+  const genesisMs = genesis !== void 0 ? ms(genesis) : void 0;
+  const tokens = [];
+  let prev = null;
+  for (const [from, to] of runs) {
+    const start = iso(from);
+    if (to !== from && latestMs !== void 0 && to === latestMs) {
+      tokens.push(`${contract(start, prev)}-`);
+      prev = latest;
+      continue;
+    }
+    if (to !== from && genesisMs !== void 0 && from === genesisMs) {
+      const end = iso(to);
+      tokens.push(`-${contract(end, genesis)}`);
+      prev = end;
+      continue;
+    }
+    let token = contract(start, prev);
+    prev = start;
+    if (to !== from) {
+      const end = iso(to);
+      token += `-${contract(end, prev)}`;
+      prev = end;
+    }
+    tokens.push(token);
+  }
+  return tokens.join(" ");
+}
+function decodeDates(encoded, options = {}) {
+  if (!encoded) return [];
+  const latest = resolve(options.latest);
+  const genesis = resolve(options.genesis);
+  const out = [];
+  let prev = null;
+  for (const token of encoded.split(/[\s+]+/).filter(Boolean)) {
+    const m = TOKEN.exec(token);
+    if (!m) continue;
+    const [, bothStart, bothEnd, startOnly, endOnly, single] = m;
+    let start = null;
+    let end = null;
+    if (single !== void 0) {
+      start = expand(single, prev);
+      end = start;
+    } else if (bothStart !== void 0) {
+      start = expand(bothStart, prev);
+      if (!start) continue;
+      end = expand(bothEnd, start);
+    } else if (startOnly !== void 0) {
+      if (latest === void 0) continue;
+      start = expand(startOnly, prev);
+      if (!start) continue;
+      end = latest;
+    } else if (endOnly !== void 0) {
+      if (genesis === void 0) continue;
+      start = genesis;
+      end = expand(endOnly, genesis);
+    }
+    if (!start || !end) continue;
+    if (ms(end) < ms(start)) {
+      out.push(start);
+      prev = start;
+      continue;
+    }
+    for (let t = ms(start); t <= ms(end); t += DAY_MS) out.push(iso(t));
+    prev = end;
+  }
+  return [...new Set(out)];
+}
+function datesParam(options = {}) {
+  return {
+    encode: (dates) => encodeDates(dates, options),
+    decode: (encoded) => decodeDates(encoded, options)
+  };
+}
+
+// src/numberTuple.ts
+function formatSignedParts(parts, delimiter, signDelim) {
+  if (!signDelim) return parts.join(delimiter);
+  let result = parts[0];
+  for (let i = 1; i < parts.length; i++) {
+    if (!parts[i].startsWith("-")) result += " ";
+    result += parts[i];
+  }
+  return result;
+}
+function parseSignedParts(s, delimiter, signDelim) {
+  if (signDelim) return s.match(/-?\d+\.?\d*/g) ?? [];
+  return s.split(delimiter);
+}
+function formatNumber(n, enc) {
+  if (enc.int) return Math.trunc(n).toString();
+  if (enc.decimals !== void 0) return n.toFixed(enc.decimals);
+  if (enc.sigfigs !== void 0) return formatSigfigs(n, enc.sigfigs);
+  throw new Error("numberTupleParam: field has no encoding (decimals/sigfigs/int)");
+}
+function formatSigfigs(n, sigfigs) {
+  if (n === 0) return sigfigs > 1 ? 0 .toFixed(sigfigs - 1) : "0";
+  const magnitude = Math.floor(Math.log10(Math.abs(n)));
+  const decimals = sigfigs - 1 - magnitude;
+  if (decimals >= 0) return n.toFixed(decimals);
+  const factor = Math.pow(10, -decimals);
+  return (Math.round(n / factor) * factor).toString();
+}
+function getPath(obj, path) {
+  return path.split(".").reduce((o, k) => o == null ? void 0 : o[k], obj);
+}
+function setPath(obj, path, val) {
+  const parts = path.split(".");
+  const out = { ...obj };
+  let cur = out;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const k = parts[i];
+    cur[k] = { ...cur[k] };
+    cur = cur[k];
+  }
+  cur[parts[parts.length - 1]] = val;
+  return out;
+}
+function numberTupleParam(opts) {
+  const {
+    default: def,
+    fields,
+    delimiter = "_",
+    signDelim = true,
+    omitDefault = true
+  } = opts;
+  function format(v) {
+    const parts = fields.map((f) => {
+      const raw = getPath(v, f.path);
+      const n = typeof raw === "number" ? raw : 0;
+      return formatNumber(n, f);
+    });
+    return formatSignedParts(parts, delimiter, signDelim);
+  }
+  const defaultEncoded = format(def);
+  return {
+    encode(v) {
+      const enc = format(v);
+      if (omitDefault && enc === defaultEncoded) return void 0;
+      return enc;
+    },
+    decode(s) {
+      if (s === void 0 || s === "") return def;
+      const parts = parseSignedParts(s, delimiter, signDelim);
+      let result = def;
+      for (let i = 0; i < fields.length; i++) {
+        const raw = parts[i];
+        if (raw === void 0) continue;
+        const n = parseFloat(raw);
+        if (isNaN(n)) continue;
+        result = setPath(result, fields[i].path, n);
+      }
+      return result;
+    }
+  };
+}
+
+// src/float.ts
+var precisionSchemes = [
+  { expBits: 5, mantBits: 16 },
+  // ~5 decimal digits
+  { expBits: 5, mantBits: 22 },
+  // ~7 decimal digits
+  { expBits: 5, mantBits: 28 },
+  // ~8 decimal digits
+  { expBits: 5, mantBits: 34 },
+  // ~10 decimal digits
+  { expBits: 5, mantBits: 40 },
+  // ~12 decimal digits
+  { expBits: 5, mantBits: 46 },
+  // ~14 decimal digits
+  { expBits: 5, mantBits: 52 }
+  // ~16 decimal digits (near IEEE 754)
+];
+var DEFAULT_EXP_BITS = 5;
+var MIN_MANT_BITS = 8;
+var MAX_MANT_BITS = 52;
+function resolvePrecision(precision) {
+  if (precision === void 0) return { expBits: DEFAULT_EXP_BITS, mantBits: 22 };
+  if (typeof precision === "object") return precision;
+  if (precision < MIN_MANT_BITS || precision > MAX_MANT_BITS) {
+    throw new Error(`Precision must be ${MIN_MANT_BITS}-${MAX_MANT_BITS} bits, got ${precision}`);
+  }
+  return { expBits: DEFAULT_EXP_BITS, mantBits: precision };
+}
+var floatBuf = new ArrayBuffer(8);
+var floatView = new DataView(floatBuf);
+function toFloat(x) {
+  floatView.setFloat64(0, x, false);
+  const byte0 = floatView.getUint8(0);
+  const neg = !!(byte0 & 128);
+  const exp = ((floatView.getUint16(0, false) & 32752) >> 4) - 1023;
+  const mant = floatView.getBigUint64(0, false) & 0xfffffffffffffn;
+  return { neg, exp, mant };
+}
+function fromFloat({ neg, exp, mant }) {
+  floatView.setBigUint64(
+    0,
+    (neg ? 0x8000000000000000n : 0n) | BigInt(exp + 1023) << 52n | mant,
+    false
+  );
+  return floatView.getFloat64(0, false);
+}
+function toFixedPoint(f, opts) {
+  let { neg, exp: fExp, mant } = f;
+  fExp++;
+  const exp = opts.exp === void 0 ? fExp : opts.exp;
+  if (fExp > exp) {
+    throw Error(`maxExp ${exp} < ${fExp}`);
+  }
+  const downshiftBy = exp - fExp + 53 - opts.mantBits;
+  const roundUp = mant & 1n << BigInt(downshiftBy - 1);
+  mant >>= BigInt(downshiftBy);
+  if (roundUp) {
+    mant += 1n;
+  }
+  mant |= 1n << BigInt(opts.mantBits - 1 - (exp - fExp));
+  return { neg, exp, mant };
+}
+function fromFixedPoint(f, mantBits) {
+  const { neg } = f;
+  const nonZeroBits = f.mant ? f.mant.toString(2).length : 0;
+  const exp = f.exp - (mantBits - nonZeroBits) - 1;
+  if (!f.mant) {
+    return { neg, exp: -1023, mant: 0n };
+  }
+  let mant = BigInt(f.mant);
+  mant = mant & (1n << BigInt(nonZeroBits - 1)) - 1n;
+  mant <<= BigInt(f.exp - exp);
+  mant <<= BigInt(52 - mantBits);
+  return { neg, exp, mant };
+}
+var BitBuffer = class _BitBuffer {
+  constructor(numBytes) {
+    this.buf = Array(numBytes || 0).fill(0);
+    this.byteOffset = 0;
+    this.bitOffset = 0;
+    this.end = 0;
+  }
+  get totalBitOffset() {
+    return this.byteOffset * 8 + this.bitOffset;
+  }
+  seek(totalBitOffset) {
+    this.byteOffset = totalBitOffset >> 3;
+    this.bitOffset = totalBitOffset & 7;
+    return this;
+  }
+  /**
+   * Encode an integer with specified bit width
+   */
+  encodeInt(n, numBits) {
+    let { buf, byteOffset, bitOffset } = this;
+    while (numBits > 0) {
+      if (byteOffset >= buf.length) {
+        buf.push(0);
+      }
+      const remainingBitsInByte = 8 - bitOffset;
+      const bitsToWrite = Math.min(numBits, remainingBitsInByte);
+      const bitsLeftInByte = remainingBitsInByte - bitsToWrite;
+      const bitsLeftToWrite = numBits - bitsToWrite;
+      const mask = (1 << bitsToWrite) - 1 << bitsLeftToWrite;
+      const shiftedBitsToWrite = (n & mask) >> bitsLeftToWrite;
+      buf[byteOffset] |= shiftedBitsToWrite << bitsLeftInByte;
+      n &= (1 << bitsLeftToWrite) - 1;
+      numBits -= bitsToWrite;
+      bitOffset += bitsToWrite;
+      if (bitOffset === 8) {
+        bitOffset = 0;
+        byteOffset++;
+      }
+    }
+    this.byteOffset = byteOffset;
+    this.bitOffset = bitOffset;
+    if (this.totalBitOffset > this.end) this.end = this.totalBitOffset;
+    return this;
+  }
+  /**
+   * Decode an integer with specified bit width
+   */
+  decodeInt(numBits) {
+    let { buf, byteOffset, bitOffset } = this;
+    let n = 0;
+    while (numBits > 0) {
+      const remainingBitsInByte = 8 - bitOffset;
+      const bitsToRead = Math.min(numBits, remainingBitsInByte);
+      const bitsLeftInByte = remainingBitsInByte - bitsToRead;
+      const mask = (1 << bitsToRead) - 1 << bitsLeftInByte;
+      const bits = (buf[byteOffset] & mask) >> bitsLeftInByte;
+      n = n << bitsToRead | bits;
+      numBits -= bitsToRead;
+      bitOffset += bitsToRead;
+      if (bitOffset === 8) {
+        bitOffset = 0;
+        byteOffset++;
+      }
+    }
+    this.byteOffset = byteOffset;
+    this.bitOffset = bitOffset;
+    return n;
+  }
+  /**
+   * Encode a bigint with specified bit width
+   */
+  encodeBigInt(n, numBits) {
+    let { buf, byteOffset, bitOffset } = this;
+    while (numBits > 0) {
+      if (byteOffset >= buf.length) {
+        buf.push(0);
+      }
+      const remainingBitsInByte = 8 - bitOffset;
+      const bitsToWrite = Math.min(numBits, remainingBitsInByte);
+      const bitsLeftInByte = remainingBitsInByte - bitsToWrite;
+      const bitsLeftToWrite = numBits - bitsToWrite;
+      const mask = (1n << BigInt(bitsToWrite)) - 1n << BigInt(bitsLeftToWrite);
+      const shiftedBitsToWrite = Number((n & mask) >> BigInt(bitsLeftToWrite));
+      buf[byteOffset] |= shiftedBitsToWrite << bitsLeftInByte;
+      n &= (1n << BigInt(bitsLeftToWrite)) - 1n;
+      numBits -= bitsToWrite;
+      bitOffset += bitsToWrite;
+      if (bitOffset === 8) {
+        bitOffset = 0;
+        byteOffset++;
+      }
+    }
+    this.byteOffset = byteOffset;
+    this.bitOffset = bitOffset;
+    if (this.totalBitOffset > this.end) this.end = this.totalBitOffset;
+    return this;
+  }
+  /**
+   * Decode a bigint with specified bit width
+   */
+  decodeBigInt(numBits) {
+    let { buf, byteOffset, bitOffset } = this;
+    let n = 0n;
+    while (numBits > 0) {
+      const remainingBitsInByte = 8 - bitOffset;
+      const bitsToRead = Math.min(numBits, remainingBitsInByte);
+      const bitsLeftInByte = remainingBitsInByte - bitsToRead;
+      const mask = (1 << bitsToRead) - 1 << bitsLeftInByte;
+      const bits = BigInt((buf[byteOffset] & mask) >> bitsLeftInByte);
+      n = n << BigInt(bitsToRead) | bits;
+      numBits -= bitsToRead;
+      bitOffset += bitsToRead;
+      if (bitOffset === 8) {
+        bitOffset = 0;
+        byteOffset++;
+      }
+    }
+    this.byteOffset = byteOffset;
+    this.bitOffset = bitOffset;
+    return n;
+  }
+  /**
+   * Encode an array of floats with shared exponent
+   */
+  encodeFixedPoints(vals, { expBits, mantBits }) {
+    const floats = vals.map(toFloat);
+    const maxExp = Math.max(...floats.map(({ exp }) => exp + 1));
+    if (maxExp >= 1 << expBits - 1) {
+      throw Error(`maxExp ${maxExp} >= ${1 << expBits}`);
+    }
+    const expToWrite = maxExp + (1 << expBits - 1) & (1 << expBits) - 1;
+    this.encodeInt(expToWrite, expBits);
+    const fixedPoints = floats.map((f) => toFixedPoint(f, { mantBits, exp: maxExp }));
+    fixedPoints.forEach(({ neg, mant }) => {
+      this.encodeInt(neg ? 1 : 0, 1);
+      this.encodeBigInt(mant, mantBits);
+    });
+    return this;
+  }
+  /**
+   * Decode an array of floats with shared exponent
+   */
+  decodeFixedPoints(count, { expBits, mantBits }) {
+    const expRaw = this.decodeInt(expBits);
+    const exp = expRaw - (1 << expBits - 1);
+    const result = [];
+    for (let i = 0; i < count; i++) {
+      const neg = this.decodeInt(1) === 1;
+      const mant = this.decodeBigInt(mantBits);
+      const fp = { neg, exp, mant };
+      const f = fromFixedPoint(fp, mantBits);
+      result.push(fromFloat(f));
+    }
+    return result;
+  }
+  /**
+   * Get bytes as Uint8Array
+   */
+  toBytes() {
+    const numBytes = Math.ceil(this.end / 8);
+    return new Uint8Array(this.buf.slice(0, numBytes));
+  }
+  /**
+   * Create from bytes
+   */
+  static fromBytes(bytes) {
+    const buf = new _BitBuffer();
+    buf.buf = Array.from(bytes);
+    buf.end = bytes.length * 8;
+    return buf;
+  }
+  /**
+   * Convert buffer to URL-safe base64 string
+   *
+   * Encodes bits directly to base64 (6 bits per character) for maximum compactness.
+   * This is more efficient than going through bytes when bit count isn't a multiple of 8.
+   *
+   * @param options - Base64 options (alphabet)
+   */
+  toBase64(options) {
+    const alphabet = resolveAlphabet(options?.alphabet ?? "rfc4648");
+    const overhang = this.end % 6;
+    if (overhang) {
+      this.encodeInt(0, 6 - overhang);
+    }
+    const numChars = this.end / 6;
+    this.seek(0);
+    let result = "";
+    for (let i = 0; i < numChars; i++) {
+      result += alphabet[this.decodeInt(6)];
+    }
+    return result;
+  }
+  /**
+   * Create a BitBuffer from a URL-safe base64 string
+   *
+   * Decodes base64 directly to bits (6 bits per character).
+   *
+   * @param str - The base64 string to decode
+   * @param options - Base64 options (alphabet)
+   */
+  static fromBase64(str, options) {
+    const alphabet = resolveAlphabet(options?.alphabet ?? "rfc4648");
+    const lookup = createLookupMap(alphabet);
+    const buf = new _BitBuffer();
+    for (const char of str) {
+      const idx = lookup.get(char);
+      if (idx === void 0) {
+        throw new Error(`Invalid base64 character: '${char}'`);
+      }
+      buf.encodeInt(idx, 6);
+    }
+    buf.seek(0);
+    return buf;
+  }
+};
+function parsePrecisionString(s) {
+  const match = s.match(/^(\d+)\+(\d+)$/);
+  if (!match) {
+    throw new Error(`Invalid precision format: "${s}". Expected format like "5+22" (exp+mant)`);
+  }
+  return { exp: parseInt(match[1], 10), mant: parseInt(match[2], 10) };
+}
+function floatParam(optsOrDefault = 0) {
+  const opts = typeof optsOrDefault === "number" ? { default: optsOrDefault } : optsOrDefault;
+  const {
+    default: defaultValue = 0,
+    encoding = "base64",
+    decimals,
+    exp,
+    mant,
+    precision,
+    alphabet
+  } = opts;
+  if (encoding === "string") {
+    if (exp !== void 0 || mant !== void 0 || precision !== void 0) {
+      throw new Error('exp/mant/precision options are only valid with encoding: "base64"');
+    }
+  }
+  if (encoding === "base64") {
+    if (decimals !== void 0) {
+      throw new Error('decimals option is only valid with encoding: "string"');
+    }
+    const hasExpMant = exp !== void 0 || mant !== void 0;
+    const hasPrecision = precision !== void 0;
+    if (hasExpMant && hasPrecision) {
+      throw new Error("Cannot specify both exp/mant and precision");
+    }
+    if (hasExpMant) {
+      if (exp === void 0 || mant === void 0) {
+        throw new Error("Both exp and mant must be specified together");
+      }
+      return createLossyBase64Param(defaultValue, { expBits: exp, mantBits: mant }, alphabet);
+    }
+    if (hasPrecision) {
+      const { exp: e, mant: m } = parsePrecisionString(precision);
+      return createLossyBase64Param(defaultValue, { expBits: e, mantBits: m }, alphabet);
+    }
+    return createLosslessBase64Param(defaultValue, alphabet);
+  }
+  if (decimals !== void 0) {
+    return createTruncatedStringParam(defaultValue, decimals);
+  }
+  return createFullStringParam(defaultValue);
+}
+function createLosslessBase64Param(defaultValue, alphabet) {
+  const opts = alphabet ? { alphabet } : void 0;
+  return {
+    encode: (value) => {
+      if (value === defaultValue) return void 0;
+      return base64Encode(floatToBytes(value), opts);
+    },
+    decode: (encoded) => {
+      if (encoded === void 0 || encoded === "") return defaultValue;
+      try {
+        return bytesToFloat(base64Decode(encoded, opts));
+      } catch {
+        return defaultValue;
+      }
+    }
+  };
+}
+function createLossyBase64Param(defaultValue, scheme, alphabet) {
+  const opts = alphabet ? { alphabet } : void 0;
+  return {
+    encode: (value) => {
+      if (value === defaultValue) return void 0;
+      const buf = new BitBuffer();
+      buf.encodeFixedPoints([value], scheme);
+      return buf.toBase64(opts);
+    },
+    decode: (encoded) => {
+      if (encoded === void 0 || encoded === "") return defaultValue;
+      try {
+        const buf = BitBuffer.fromBase64(encoded, opts);
+        const [value] = buf.decodeFixedPoints(1, scheme);
+        return value;
+      } catch {
+        return defaultValue;
+      }
+    }
+  };
+}
+function createFullStringParam(defaultValue) {
+  return {
+    encode: (value) => {
+      if (value === defaultValue) return void 0;
+      return value.toString();
+    },
+    decode: (encoded) => {
+      if (encoded === void 0 || encoded === "") return defaultValue;
+      const parsed = parseFloat(encoded);
+      return isNaN(parsed) ? defaultValue : parsed;
+    }
+  };
+}
+function createTruncatedStringParam(defaultValue, decimals) {
+  const multiplier = Math.pow(10, decimals);
+  return {
+    encode: (value) => {
+      if (value === defaultValue) return void 0;
+      const truncated = Math.round(value * multiplier) / multiplier;
+      return truncated.toFixed(decimals);
+    },
+    decode: (encoded) => {
+      if (encoded === void 0 || encoded === "") return defaultValue;
+      const parsed = parseFloat(encoded);
+      return isNaN(parsed) ? defaultValue : parsed;
+    }
+  };
+}
+function optFloatParam(opts = {}) {
+  const {
+    encoding = "base64",
+    decimals,
+    exp,
+    mant,
+    precision,
+    alphabet
+  } = opts;
+  if (encoding === "string") {
+    if (exp !== void 0 || mant !== void 0 || precision !== void 0) {
+      throw new Error('exp/mant/precision options are only valid with encoding: "base64"');
+    }
+  }
+  if (encoding === "base64") {
+    if (decimals !== void 0) {
+      throw new Error('decimals option is only valid with encoding: "string"');
+    }
+    const hasExpMant = exp !== void 0 || mant !== void 0;
+    const hasPrecision = precision !== void 0;
+    if (hasExpMant && hasPrecision) {
+      throw new Error("Cannot specify both exp/mant and precision");
+    }
+    if (hasExpMant) {
+      if (exp === void 0 || mant === void 0) {
+        throw new Error("Both exp and mant must be specified together");
+      }
+      return createOptLossyBase64Param({ expBits: exp, mantBits: mant }, alphabet);
+    }
+    if (hasPrecision) {
+      const { exp: e, mant: m } = parsePrecisionString(precision);
+      return createOptLossyBase64Param({ expBits: e, mantBits: m }, alphabet);
+    }
+    return createOptLosslessBase64Param(alphabet);
+  }
+  if (decimals !== void 0) {
+    return createOptTruncatedStringParam(decimals);
+  }
+  return createOptFullStringParam();
+}
+function createOptLosslessBase64Param(alphabet) {
+  const opts = alphabet ? { alphabet } : void 0;
+  return {
+    encode: (value) => {
+      if (value === null) return void 0;
+      return base64Encode(floatToBytes(value), opts);
+    },
+    decode: (encoded) => {
+      if (encoded === void 0 || encoded === "") return null;
+      try {
+        return bytesToFloat(base64Decode(encoded, opts));
+      } catch {
+        return null;
+      }
+    }
+  };
+}
+function createOptLossyBase64Param(scheme, alphabet) {
+  const opts = alphabet ? { alphabet } : void 0;
+  return {
+    encode: (value) => {
+      if (value === null) return void 0;
+      const buf = new BitBuffer();
+      buf.encodeFixedPoints([value], scheme);
+      return buf.toBase64(opts);
+    },
+    decode: (encoded) => {
+      if (encoded === void 0 || encoded === "") return null;
+      try {
+        const buf = BitBuffer.fromBase64(encoded, opts);
+        const [value] = buf.decodeFixedPoints(1, scheme);
+        return value;
+      } catch {
+        return null;
+      }
+    }
+  };
+}
+function createOptFullStringParam() {
+  return {
+    encode: (value) => {
+      if (value === null) return void 0;
+      return value.toString();
+    },
+    decode: (encoded) => {
+      if (encoded === void 0 || encoded === "") return null;
+      const parsed = parseFloat(encoded);
+      return isNaN(parsed) ? null : parsed;
+    }
+  };
+}
+function createOptTruncatedStringParam(decimals) {
+  const multiplier = Math.pow(10, decimals);
+  return {
+    encode: (value) => {
+      if (value === null) return void 0;
+      const truncated = Math.round(value * multiplier) / multiplier;
+      return truncated.toFixed(decimals);
+    },
+    decode: (encoded) => {
+      if (encoded === void 0 || encoded === "") return null;
+      const parsed = parseFloat(encoded);
+      return isNaN(parsed) ? null : parsed;
+    }
+  };
+}
+function base64FloatParam(optsOrDefault = 0) {
+  const opts = typeof optsOrDefault === "number" ? { default: optsOrDefault } : optsOrDefault;
+  return floatParam({ ...opts, encoding: "base64" });
+}
+function pointParam(opts = {}) {
+  const {
+    encoding = "base64",
+    decimals = 2,
+    precision,
+    default: defaultPoint = null,
+    alphabet
+  } = opts;
+  if (encoding === "string") {
+    const synthetic = defaultPoint ?? { x: 0, y: 0 };
+    const inner = numberTupleParam({
+      default: synthetic,
+      fields: [
+        { path: "x", decimals },
+        { path: "y", decimals }
+      ],
+      signDelim: true,
+      omitDefault: defaultPoint !== null
+    });
+    return {
+      encode: (point) => point === null ? void 0 : inner.encode(point),
+      decode: (encoded) => {
+        if (encoded === void 0 || encoded === "") return defaultPoint;
+        const parts = parseSignedParts(encoded, "_", true);
+        if (parts.length < 2) return defaultPoint;
+        if (isNaN(parseFloat(parts[0])) || isNaN(parseFloat(parts[1]))) return defaultPoint;
+        return inner.decode(encoded);
+      }
+    };
+  }
+  const scheme = resolvePrecision(precision);
+  const base64Opts = alphabet ? { alphabet } : void 0;
+  return {
+    encode: (point) => {
+      if (point === null) return void 0;
+      if (defaultPoint && point.x === defaultPoint.x && point.y === defaultPoint.y) {
+        return void 0;
+      }
+      const buf = new BitBuffer();
+      buf.encodeFixedPoints([point.x, point.y], scheme);
+      return buf.toBase64(base64Opts);
+    },
+    decode: (encoded) => {
+      if (encoded === void 0 || encoded === "") return defaultPoint;
+      try {
+        const buf = BitBuffer.fromBase64(encoded, base64Opts);
+        const [x, y] = buf.decodeFixedPoints(2, scheme);
+        return { x, y };
+      } catch {
+        return defaultPoint;
+      }
+    }
+  };
+}
+function encodeFloatAllModes(value, opts = {}) {
+  const { decimals = 2, precision } = opts;
+  const scheme = resolvePrecision(precision);
+  const multiplier = Math.pow(10, decimals);
+  const truncated = Math.round(value * multiplier) / multiplier;
+  const stringEncoded = truncated.toFixed(decimals);
+  const buf = new BitBuffer();
+  buf.encodeFixedPoints([value], scheme);
+  return {
+    string: stringEncoded,
+    base64: buf.toBase64(),
+    bits: buf.end
+  };
+}
+function encodePointAllModes(point, opts = {}) {
+  const { decimals = 2, precision } = opts;
+  const scheme = resolvePrecision(precision);
+  const multiplier = Math.pow(10, decimals);
+  const xTrunc = Math.round(point.x * multiplier) / multiplier;
+  const yTrunc = Math.round(point.y * multiplier) / multiplier;
+  const xStr = xTrunc.toFixed(decimals);
+  const yStr = yTrunc.toFixed(decimals);
+  const delimiter = yTrunc >= 0 ? "+" : "";
+  const stringEncoded = `${xStr}${delimiter}${yStr}`;
+  const buf = new BitBuffer();
+  buf.encodeFixedPoints([point.x, point.y], scheme);
+  return {
+    string: stringEncoded,
+    base64: buf.toBase64(),
+    bits: buf.end
+  };
+}
+function llzParam(opts) {
+  const {
+    default: def,
+    latLngDecimals = 4,
+    zoomDecimals = 2,
+    pitchDecimals = 0,
+    bearingDecimals = 0,
+    delimiter = "_",
+    signDelim = true
+  } = opts;
+  const hasPB = def.pitch !== void 0 || def.bearing !== void 0;
+  const fields = [
+    { path: "lat", decimals: latLngDecimals },
+    { path: "lng", decimals: latLngDecimals },
+    { path: "zoom", decimals: zoomDecimals }
+  ];
+  if (hasPB) {
+    fields.push(
+      { path: "pitch", decimals: pitchDecimals },
+      { path: "bearing", decimals: bearingDecimals }
+    );
+  }
+  const fullDef = hasPB ? { ...def, pitch: def.pitch ?? 0, bearing: def.bearing ?? 0 } : def;
+  return numberTupleParam({ default: fullDef, fields, delimiter, signDelim });
+}
+function viewStateParam(opts) {
+  const {
+    default: def,
+    latLngDecimals = 4,
+    zoomDecimals = 2,
+    pitchDecimals = 0,
+    bearingDecimals = 0,
+    delimiter = "_",
+    signDelim = true,
+    pitchFallback = 0,
+    bearingFallback = 0
+  } = opts;
+  const synthetic = def ?? {
+    latitude: 0,
+    longitude: 0,
+    zoom: 0,
+    pitch: pitchFallback,
+    bearing: bearingFallback
+  };
+  const inner = numberTupleParam({
+    default: synthetic,
+    fields: [
+      { path: "latitude", decimals: latLngDecimals },
+      { path: "longitude", decimals: latLngDecimals },
+      { path: "zoom", decimals: zoomDecimals },
+      { path: "pitch", decimals: pitchDecimals },
+      { path: "bearing", decimals: bearingDecimals }
+    ],
+    delimiter,
+    signDelim,
+    omitDefault: def !== null
+  });
+  return {
+    encode(v) {
+      if (v === null) return void 0;
+      return inner.encode(v);
+    },
+    decode(s) {
+      if (s === void 0 || s === "") return def;
+      const parts = signDelim ? s.match(/-?\d+\.?\d*/g) ?? [] : s.split(delimiter);
+      if (parts.length < 3) return def;
+      const head = [parseFloat(parts[0]), parseFloat(parts[1]), parseFloat(parts[2])];
+      if (head.some(isNaN)) return def;
+      return inner.decode(s);
+    }
+  };
+}
+function bboxParam(opts) {
+  const {
+    default: def,
+    latLngDecimals = 4,
+    delimiter = "_",
+    signDelim = true
+  } = opts;
+  return numberTupleParam({
+    default: def,
+    fields: [
+      { path: "sw.lat", decimals: latLngDecimals },
+      { path: "sw.lng", decimals: latLngDecimals },
+      { path: "ne.lat", decimals: latLngDecimals },
+      { path: "ne.lng", decimals: latLngDecimals }
+    ],
+    delimiter,
+    signDelim
+  });
+}
+
+// src/tagFilter.ts
+var DEFAULT_PREFIXES = { in: "", out: "-", off: "~" };
+var DEFAULT_TAG_CYCLE = ["in", "out", "off"];
+function validatePrefixes(p) {
+  if (p.out === "") throw new Error("tagFilterParam: prefixes.out must be non-empty");
+  if (p.off === "") throw new Error("tagFilterParam: prefixes.off must be non-empty");
+  const seen = /* @__PURE__ */ new Set();
+  for (const [k, v] of Object.entries(p)) {
+    if (seen.has(v)) throw new Error(`tagFilterParam: duplicate prefix ${JSON.stringify(v)} (${k})`);
+    seen.add(v);
+  }
+}
+function validateTagName(tag, p) {
+  if (/\s/.test(tag)) {
+    throw new Error(`tagFilterParam: tag name ${JSON.stringify(tag)} contains whitespace`);
+  }
+  for (const [kind, prefix] of Object.entries(p)) {
+    if (prefix !== "" && tag.startsWith(prefix)) {
+      throw new Error(
+        `tagFilterParam: tag name ${JSON.stringify(tag)} starts with reserved ${kind}-prefix ${JSON.stringify(prefix)}`
+      );
+    }
+  }
+}
+function defaultStateOf(defaults, tag) {
+  return defaults?.[tag] ?? "off";
+}
+function effectiveTagState(filters, tag, defaults) {
+  return filters.get(tag) ?? defaultStateOf(defaults, tag);
+}
+function runPassesTagFilters(itemTags, filters, defaults) {
+  const constrained = /* @__PURE__ */ new Set([
+    ...filters.keys(),
+    ...defaults ? Object.keys(defaults) : []
+  ]);
+  for (const tag of constrained) {
+    const state = effectiveTagState(filters, tag, defaults);
+    if (state === "off") continue;
+    const has = itemTags.includes(tag);
+    if (state === "in" && !has) return false;
+    if (state === "out" && has) return false;
+  }
+  return true;
+}
+function cycleTagFilter(filters, tag, defaults, cycle = DEFAULT_TAG_CYCLE) {
+  if (cycle.length === 0) throw new Error("cycleTagFilter: cycle must be non-empty");
+  const current = effectiveTagState(filters, tag, defaults);
+  const idx = cycle.indexOf(current);
+  const next = idx === -1 ? cycle[0] : cycle[(idx + 1) % cycle.length];
+  const defaultState = defaultStateOf(defaults, tag);
+  const out = new Map(filters);
+  if (next === defaultState) out.delete(tag);
+  else out.set(tag, next);
+  return out;
+}
+function tagFilterParam(options = {}) {
+  const prefixes = { ...DEFAULT_PREFIXES, ...options.prefixes };
+  validatePrefixes(prefixes);
+  const defaults = options.defaults;
+  if (defaults) {
+    for (const tag of Object.keys(defaults)) validateTagName(tag, prefixes);
+  }
+  const orderedPrefixes = ["out", "off", "in"].map((s) => [s, prefixes[s]]).sort((a, b) => b[1].length - a[1].length);
+  function encodeToken(tag, state) {
+    validateTagName(tag, prefixes);
+    return prefixes[state] + tag;
+  }
+  function classifyToken(tok) {
+    if (prefixes.in !== "+" && tok.startsWith("+")) {
+      const tag = tok.slice(1);
+      if (!tag) return null;
+      return { state: "in", tag };
+    }
+    for (const [state, prefix] of orderedPrefixes) {
+      if (prefix === "" || tok.startsWith(prefix)) {
+        const tag = prefix === "" ? tok : tok.slice(prefix.length);
+        if (!tag) return null;
+        return { state, tag };
+      }
+    }
+    return null;
+  }
+  return {
+    encode(filters) {
+      const parts = [];
+      for (const [tag, state] of filters) {
+        if (state === defaultStateOf(defaults, tag)) continue;
+        parts.push(encodeToken(tag, state));
+      }
+      if (parts.length === 0) return void 0;
+      return parts.join(" ");
+    },
+    decode(encoded) {
+      const out = /* @__PURE__ */ new Map();
+      if (!encoded) return out;
+      for (const tok of encoded.split(/\s+/)) {
+        if (!tok) continue;
+        const c = classifyToken(tok);
+        if (!c) continue;
+        out.set(c.tag, c.state);
+      }
+      return out;
+    }
+  };
+}
+
+// src/diagnostics.ts
+function deprecatedKeysOf(spec) {
+  if (!spec) return [];
+  return Array.isArray(spec) ? [...spec] : Object.keys(spec);
+}
+function migrationFor(spec, key) {
+  if (!spec || Array.isArray(spec)) return null;
+  const v = spec[key];
+  return typeof v === "function" ? v : null;
+}
+var defaultOnDeprecated = ({ key, raw, migrated }) => {
+  if (migrated) {
+    console.warn(`[use-prms] migrated deprecated URL param "${key}"=${raw} \u2192`, migrated);
+  } else {
+    console.warn(`[use-prms] stripping deprecated URL param "${key}"=${raw}`);
+  }
+};
+function classifyParam(param, raw) {
+  if (raw === void 0) return { state: "absent" };
+  const decoded = param.decode(raw);
+  const reencoded = param.encode(decoded);
+  if (raw === reencoded) return { state: "canonical", raw };
+  const defaultEncoded = param.encode(param.decode(void 0));
+  if (reencoded === defaultEncoded) return { state: "malformed", raw, canonical: reencoded };
+  return { state: "stale", raw, canonical: reencoded };
+}
+function inspectUrl(params, options = {}, strategy = getDefaultStrategy()) {
+  const urlParams = strategy.parse();
+  const declared = new Set(Object.keys(params));
+  const deprecatedSet = new Set(
+    deprecatedKeysOf(options.deprecated).filter((k) => !declared.has(k))
+  );
+  const present = Object.keys(urlParams);
+  const unrecognized = present.filter((k) => !declared.has(k) && !deprecatedSet.has(k));
+  const deprecated = present.filter((k) => deprecatedSet.has(k));
+  const malformed = [];
+  const stale = [];
+  for (const key of declared) {
+    const raw = urlParams[key]?.[0];
+    const c = classifyParam(params[key], raw);
+    if (c.state === "malformed") malformed.push({ key, raw: c.raw, canonical: c.canonical });
+    else if (c.state === "stale") stale.push({ key, raw: c.raw, canonical: c.canonical });
+  }
+  return { unrecognized, deprecated, malformed, stale };
+}
+function cleanUrl(params, policy = {}, strategy = getDefaultStrategy()) {
+  const diag = inspectUrl(params, { deprecated: policy.deprecated }, strategy);
+  const {
+    unrecognized = "keep",
+    malformed = "keep",
+    stale = "keep",
+    deprecated: depSpec,
+    onDeprecated
+  } = policy;
+  const willStripUnrecognized = unrecognized === "strip" && diag.unrecognized.length > 0;
+  const willResetMalformed = malformed === "reset" && diag.malformed.length > 0;
+  const willNormalizeStale = stale === "normalize" && diag.stale.length > 0;
+  const willHandleDeprecated = diag.deprecated.length > 0;
+  if (!willStripUnrecognized && !willResetMalformed && !willNormalizeStale && !willHandleDeprecated) return diag;
+  if (typeof window === "undefined") return diag;
+  const current = strategy.parse();
+  const next = { ...current };
+  if (willStripUnrecognized) {
+    for (const k of diag.unrecognized) delete next[k];
+  }
+  const applyKeyed = (entries) => {
+    for (const { key, canonical } of entries) {
+      if (canonical === void 0) delete next[key];
+      else next[key] = [canonical];
+    }
+  };
+  if (willResetMalformed) applyKeyed(diag.malformed);
+  if (willNormalizeStale) applyKeyed(diag.stale);
+  if (willHandleDeprecated) {
+    const handler = onDeprecated === null ? null : onDeprecated ?? defaultOnDeprecated;
+    for (const key of diag.deprecated) {
+      const raw = current[key]?.[0] ?? "";
+      const migrate = migrationFor(depSpec, key);
+      let migrated;
+      if (migrate) {
+        migrated = migrate(raw);
+        for (const [mk, mv] of Object.entries(migrated)) {
+          const p = params[mk];
+          if (!p) continue;
+          const enc = p.encode(mv);
+          if (enc === void 0) delete next[mk];
+          else next[mk] = [enc];
+        }
+      }
+      delete next[key];
+      handler?.({ key, raw, ...migrated !== void 0 && { migrated } });
+    }
+  }
+  const url = new URL(window.location.href);
+  const updated = strategy.buildUrl(url, next);
+  window.history.replaceState({ ...window.history.state }, "", updated);
+  window.dispatchEvent(new PopStateEvent("popstate"));
+  return diag;
+}
+
+// src/registry.ts
+function strategyName(strategy) {
+  return strategy === hashStrategy ? "hash" : "query";
+}
+var live = /* @__PURE__ */ new Map();
+var catalogue = /* @__PURE__ */ new Map();
+var listeners = /* @__PURE__ */ new Set();
+var idOf = (strategy, key) => `${strategy}::${key}`;
+function notify() {
+  for (const cb of listeners) cb();
+}
+function onRegistryChange(cb) {
+  listeners.add(cb);
+  return () => {
+    listeners.delete(cb);
+  };
+}
+function defaultEncodedOf(input) {
+  if (input.multi) return void 0;
+  try {
+    return input.param.encode(input.param.decode(void 0));
+  } catch {
+    return void 0;
+  }
+}
+function registerParam(input) {
+  const id = idOf(input.strategy, input.key);
+  const existing = live.get(id);
+  if (existing) {
+    existing.refs += 1;
+  } else {
+    live.set(id, {
+      key: input.key,
+      keys: input.keys ?? [input.key],
+      strategy: input.strategy,
+      param: input.param,
+      aliasParams: input.aliasParams,
+      multi: input.multi ?? false,
+      label: input.label,
+      description: input.description,
+      examples: input.examples,
+      defaultEncoded: defaultEncodedOf(input),
+      refs: 1
+    });
+  }
+  notify();
+  let disposed = false;
+  return () => {
+    if (disposed) return;
+    disposed = true;
+    const entry = live.get(id);
+    if (!entry) return;
+    entry.refs -= 1;
+    if (entry.refs <= 0) live.delete(id);
+    notify();
+  };
+}
+function describeParams(entries, opts = {}) {
+  const strategy = opts.strategy ?? "query";
+  const ids = [];
+  for (const [key, meta] of Object.entries(entries)) {
+    const id = idOf(strategy, key);
+    const param = meta.param ?? passthroughParam;
+    catalogue.set(id, {
+      key,
+      keys: [key],
+      strategy,
+      param,
+      multi: meta.multi ?? false,
+      label: meta.label,
+      description: meta.description,
+      examples: meta.examples,
+      defaultEncoded: meta.param ? defaultEncodedOf({ key, strategy, param, multi: meta.multi }) : void 0,
+      refs: 0
+    });
+    ids.push(id);
+  }
+  notify();
+  return () => {
+    for (const id of ids) catalogue.delete(id);
+    notify();
+  };
+}
+var passthroughParam = {
+  encode: (v) => v === void 0 || v === null ? void 0 : String(v),
+  decode: (e) => e
+};
+function liveRegistrations(strategy) {
+  const all = [...live.values()];
+  return strategy ? all.filter((e) => e.strategy === strategy) : all;
+}
+function catalogueRegistrations(strategy) {
+  const all = [...catalogue.values()];
+  return strategy ? all.filter((e) => e.strategy === strategy) : all;
+}
+function __resetRegistry() {
+  live.clear();
+  catalogue.clear();
+  notify();
+}
+
+// src/core.ts
+function serializeParams(params) {
+  const searchParams = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value === void 0) {
+      continue;
+    } else if (value === "") {
+      continue;
+    } else {
+      searchParams.set(key, value);
+    }
+  }
+  let result = searchParams.toString();
+  const valuelessKeys = Object.entries(params).filter(([_, value]) => value === "").map(([key, _]) => encodeURIComponent(key));
+  if (valuelessKeys.length > 0) {
+    const valuelessPart = valuelessKeys.join("&");
+    result = result ? `${result}&${valuelessPart}` : valuelessPart;
+  }
+  return result;
+}
+function parseParams(source) {
+  const searchParams = typeof source === "string" ? new URLSearchParams(source) : source;
+  const result = {};
+  for (const [key, value] of searchParams.entries()) {
+    if (!(key in result)) {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+function getCurrentParams() {
+  if (typeof window === "undefined") return {};
+  return parseParams(window.location.search);
+}
+function updateUrl(params, push = false) {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  const search = serializeParams(params);
+  url.search = search;
+  const method = push ? "pushState" : "replaceState";
+  window.history[method]({ ...window.history.state }, "", url.toString());
+  window.dispatchEvent(new PopStateEvent("popstate"));
+}
+
+// src/vue.ts
+function normalizeOptions(options) {
+  return typeof options === "boolean" ? { push: options } : options;
+}
+function setupBinding(codecs, options) {
+  const strategy = getDefaultStrategy();
+  const triggers = /* @__PURE__ */ new Set();
+  const fire = () => {
+    for (const trigger of triggers) trigger();
+  };
+  const binding = new UrlBinding(strategy, fire);
+  binding.setCodecs(codecs);
+  binding.setPush(options.push ?? false);
+  binding.setDebounce(options.debounce ?? 0);
+  const unsubscribe = strategy.subscribe(fire);
+  onScopeDispose(() => {
+    unsubscribe();
+    binding.dispose();
+  });
+  const refFor = (key) => customRef((track, trigger) => {
+    triggers.add(trigger);
+    return {
+      get() {
+        track();
+        return binding.read(getUrlSnapshot(strategy))[key];
+      },
+      set(value) {
+        binding.write({ [key]: value });
+      }
+    };
+  });
+  return { binding, refFor };
+}
+function useUrlState(key, param, options = {}) {
+  const { refFor } = setupBinding({ [key]: toMultiCodec(param) }, normalizeOptions(options));
+  return refFor(key);
+}
+function useMultiUrlState(key, param, options = {}) {
+  const { refFor } = setupBinding({ [key]: param }, normalizeOptions(options));
+  return refFor(key);
+}
+function useUrlStates(params, options = {}) {
+  const codecs = Object.fromEntries(
+    Object.entries(params).map(([key, param]) => [key, toMultiCodec(param)])
+  );
+  const { binding, refFor } = setupBinding(codecs, normalizeOptions(options));
+  const values = reactive(
+    Object.fromEntries(Object.keys(params).map((key) => [key, refFor(key)]))
+  );
+  const setValues = (updates) => binding.write(updates);
+  return { values, setValues };
+}
+function useMultiUrlStates(params, options = {}) {
+  const codecs = { ...params };
+  const { binding, refFor } = setupBinding(codecs, normalizeOptions(options));
+  const values = reactive(
+    Object.fromEntries(Object.keys(params).map((key) => [key, refFor(key)]))
+  );
+  const setValues = (updates) => binding.write(updates);
+  return { values, setValues };
+}
+
+export { ALPHABETS, BASE64_CHARS, BitBuffer, DEFAULT_TAG_CYCLE, precisionSchemes as PRECISION_SCHEMES, UrlBinding, __resetRegistry, base64Decode, base64Encode, base64FloatParam, base64Param, bboxParam, binaryParam, boolParam, bytesToFloat, catalogueRegistrations, classifyParam, cleanUrl, clearParams, codeParam, codesParam, createLookupMap, cycleTagFilter, datesParam, decodeDates, defStringParam, describeParams, effectiveTagState, encodeDates, encodeFloatAllModes, encodePointAllModes, enumParam, flagPackParam, floatParam, floatToBytes, formatSignedParts, fromFixedPoint, fromFloat, getCurrentParams, getDefaultStrategy, getServerSnapshot, getUrlSnapshot, hashStrategy, inspectUrl, intParam, liveRegistrations, llzParam, multiCodec, multiFloatParam, multiIntParam, multiStringParam, multiToSingle, notifyLocationChange, numberArrayParam, numberTupleParam, onRegistryChange, optFloatParam, optIntParam, paginationParam, parseMultiParams, parseParams, parseSignedParts, pointParam, precisionSchemes, queryStrategy, registerParam, resolveAlphabet, resolvePrecision, runPassesTagFilters, serializeMultiParams, serializeParams, setDefaultStrategy, singleToMulti, strategyName, stringParam, stringsParam, tagFilterParam, toFixedPoint, toFloat, toMultiCodec, updateUrl, useMultiUrlState, useMultiUrlStates, useUrlState, useUrlStates, validateAlphabet, viewStateParam, writeParams };
+//# sourceMappingURL=vue.js.map
+//# sourceMappingURL=vue.js.map

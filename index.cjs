@@ -2,7 +2,7 @@
 
 var react = require('react');
 
-// src/core.ts
+// src/strategies.ts
 function parseMultiParams(source) {
   const searchParams = typeof source === "string" ? new URLSearchParams(source) : source;
   const result = {};
@@ -121,6 +121,181 @@ function getDefaultStrategy() {
 function setDefaultStrategy(strategy) {
   defaultStrategy = strategy;
 }
+
+// src/store.ts
+function singleToMulti(encoded) {
+  if (encoded === void 0) return [];
+  return [encoded];
+}
+function multiToSingle(multi) {
+  if (multi.length === 0) return void 0;
+  return multi[0];
+}
+function toMultiCodec(param) {
+  return {
+    encode: (value) => singleToMulti(param.encode(value)),
+    decode: (encoded) => param.decode(multiToSingle(encoded))
+  };
+}
+function multiCodec(param) {
+  return param;
+}
+function arraysEqual(a, b) {
+  return a.length === b.length && a.every((v, i) => v === b[i]);
+}
+function debounce(fn, ms2) {
+  let timeoutId = null;
+  const debounced = ((...args) => {
+    if (timeoutId) clearTimeout(timeoutId);
+    timeoutId = setTimeout(() => {
+      timeoutId = null;
+      fn(...args);
+    }, ms2);
+  });
+  debounced.cancel = () => {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      timeoutId = null;
+    }
+  };
+  return debounced;
+}
+var snapshotCache = /* @__PURE__ */ new WeakMap();
+function getUrlSnapshot(strategy) {
+  const raw = strategy.getRaw();
+  const cached = snapshotCache.get(strategy);
+  if (cached && cached.raw === raw) return cached.snapshot;
+  const snapshot = strategy.parse();
+  snapshotCache.set(strategy, { raw, snapshot });
+  return snapshot;
+}
+function getServerSnapshot() {
+  return {};
+}
+function writeParams(strategy, updates, options = {}) {
+  if (typeof window === "undefined") return;
+  const currentParams = strategy.parse();
+  for (const [key, encoded] of Object.entries(updates)) {
+    if (encoded.length === 0) {
+      delete currentParams[key];
+    } else {
+      currentParams[key] = encoded;
+    }
+  }
+  const url = new URL(window.location.href);
+  const newUrl = strategy.buildUrl(url, currentParams);
+  const method = options.push ? "pushState" : "replaceState";
+  window.history[method]({ ...window.history.state }, "", newUrl);
+  window.dispatchEvent(new PopStateEvent("popstate"));
+}
+var UrlBinding = class {
+  constructor(strategy, onChange) {
+    this.strategy = strategy;
+    this.onChange = onChange;
+    this.codecs = {};
+    this.push = false;
+    this.debounceMs = 0;
+    this.debounced = null;
+    this.lastWritten = {};
+    this.pending = null;
+    this.decodeCache = {};
+  }
+  /** Replace the live key → codec map (called each render; cheap). */
+  setCodecs(codecs) {
+    this.codecs = codecs;
+  }
+  /** Set the write method used by subsequent writes. */
+  setPush(push) {
+    this.push = push;
+  }
+  /**
+   * Create/replace or tear down the debounce timer for `ms`. A no-op when `ms`
+   * is unchanged. Call from an effect; returns nothing.
+   */
+  setDebounce(ms2) {
+    if (ms2 === this.debounceMs && ms2 === 0 === (this.debounced === null)) return;
+    this.debounceMs = ms2;
+    this.debounced?.cancel();
+    this.debounced = ms2 > 0 ? debounce((updates) => {
+      writeParams(this.strategy, updates, { push: this.push });
+      this.pending = null;
+    }, ms2) : null;
+  }
+  decode(key, encoded) {
+    const codec = this.codecs[key];
+    const cached = this.decodeCache[key];
+    if (cached && cached.codec === codec && arraysEqual(cached.encoded, encoded)) {
+      return cached.decoded;
+    }
+    const decoded = codec.decode(encoded);
+    this.decodeCache[key] = { encoded, codec, decoded };
+    return decoded;
+  }
+  /**
+   * The decoded value for every owned key, given the live `snapshot`. May
+   * discard a stale pending value (if one of our keys changed externally) as a
+   * side-effect — matching the original hooks' render-time bookkeeping.
+   */
+  read(snapshot) {
+    const keys = Object.keys(this.codecs);
+    const encOf = (k) => snapshot[k] ?? [];
+    if (this.pending) {
+      const ownKeyChanged = keys.some((k) => !arraysEqual(encOf(k), this.pending.prevEncoded[k] ?? []));
+      if (ownKeyChanged) {
+        this.pending = null;
+        this.debounced?.cancel();
+        this.lastWritten = {};
+        return Object.fromEntries(keys.map((k) => [k, this.decode(k, encOf(k))]));
+      }
+      return Object.fromEntries(keys.map((k) => {
+        if (k in this.pending.values) return [k, this.pending.values[k]];
+        const encoded = encOf(k);
+        const lw = this.lastWritten[k];
+        if (lw && arraysEqual(lw.encoded, encoded)) return [k, lw.decoded];
+        return [k, this.decode(k, encoded)];
+      }));
+    }
+    return Object.fromEntries(keys.map((k) => {
+      const encoded = encOf(k);
+      const lw = this.lastWritten[k];
+      if (lw && arraysEqual(lw.encoded, encoded)) {
+        return [k, lw.decoded];
+      }
+      delete this.lastWritten[k];
+      return [k, this.decode(k, encoded)];
+    }));
+  }
+  /**
+   * Write `values` (a partial map of owned keys). Batched into one history
+   * entry; debounced if a debounce timer is active.
+   */
+  write(values) {
+    const encodedUpdates = {};
+    for (const [key, value] of Object.entries(values)) {
+      const codec = this.codecs[key];
+      if (!codec) continue;
+      const encoded = codec.encode(value);
+      encodedUpdates[key] = encoded;
+      this.lastWritten[key] = { encoded, decoded: value };
+    }
+    if (this.debounced) {
+      const pendingValues = { ...this.pending?.values ?? {} };
+      for (const [key, value] of Object.entries(values)) pendingValues[key] = value;
+      const parsed = this.strategy.parse();
+      const prevEncoded = {};
+      for (const k of Object.keys(this.codecs)) prevEncoded[k] = parsed[k] ?? [];
+      this.pending = { values: pendingValues, prevEncoded };
+      this.debounced(encodedUpdates);
+      this.onChange();
+    } else {
+      writeParams(this.strategy, encodedUpdates, { push: this.push });
+    }
+  }
+  /** Cancel any in-flight debounced write. Call on unmount. */
+  dispose() {
+    this.debounced?.cancel();
+  }
+};
 
 // src/params.ts
 function stringParam(init) {
@@ -270,7 +445,7 @@ function multiStringParam(init = []) {
   return {
     encode: (values) => {
       if (values.length === 0 && init.length === 0) return [];
-      if (arraysEqual(values, init)) return [];
+      if (arraysEqual2(values, init)) return [];
       return values;
     },
     decode: (encoded) => {
@@ -283,7 +458,7 @@ function multiIntParam(init = []) {
   return {
     encode: (values) => {
       if (values.length === 0 && init.length === 0) return [];
-      if (arraysEqual(values, init)) return [];
+      if (arraysEqual2(values, init)) return [];
       return values.map((v) => v.toString());
     },
     decode: (encoded) => {
@@ -296,7 +471,7 @@ function multiFloatParam(init = []) {
   return {
     encode: (values) => {
       if (values.length === 0 && init.length === 0) return [];
-      if (arraysEqual(values, init)) return [];
+      if (arraysEqual2(values, init)) return [];
       return values.map((v) => v.toString());
     },
     decode: (encoded) => {
@@ -305,823 +480,8 @@ function multiFloatParam(init = []) {
     }
   };
 }
-function arraysEqual(a, b) {
-  return a.length === b.length && a.every((v, i) => v === b[i]);
-}
-
-// src/registry.ts
-function strategyName(strategy) {
-  return strategy === hashStrategy ? "hash" : "query";
-}
-var live = /* @__PURE__ */ new Map();
-var catalogue = /* @__PURE__ */ new Map();
-var listeners = /* @__PURE__ */ new Set();
-var idOf = (strategy, key) => `${strategy}::${key}`;
-function notify() {
-  for (const cb of listeners) cb();
-}
-function onRegistryChange(cb) {
-  listeners.add(cb);
-  return () => {
-    listeners.delete(cb);
-  };
-}
-function defaultEncodedOf(input) {
-  if (input.multi) return void 0;
-  try {
-    return input.param.encode(input.param.decode(void 0));
-  } catch {
-    return void 0;
-  }
-}
-function registerParam(input) {
-  const id = idOf(input.strategy, input.key);
-  const existing = live.get(id);
-  if (existing) {
-    existing.refs += 1;
-  } else {
-    live.set(id, {
-      key: input.key,
-      keys: input.keys ?? [input.key],
-      strategy: input.strategy,
-      param: input.param,
-      aliasParams: input.aliasParams,
-      multi: input.multi ?? false,
-      label: input.label,
-      description: input.description,
-      examples: input.examples,
-      defaultEncoded: defaultEncodedOf(input),
-      refs: 1
-    });
-  }
-  notify();
-  let disposed = false;
-  return () => {
-    if (disposed) return;
-    disposed = true;
-    const entry = live.get(id);
-    if (!entry) return;
-    entry.refs -= 1;
-    if (entry.refs <= 0) live.delete(id);
-    notify();
-  };
-}
-function describeParams(entries, opts = {}) {
-  const strategy = opts.strategy ?? "query";
-  const ids = [];
-  for (const [key, meta] of Object.entries(entries)) {
-    const id = idOf(strategy, key);
-    const param = meta.param ?? passthroughParam;
-    catalogue.set(id, {
-      key,
-      keys: [key],
-      strategy,
-      param,
-      multi: meta.multi ?? false,
-      label: meta.label,
-      description: meta.description,
-      examples: meta.examples,
-      defaultEncoded: meta.param ? defaultEncodedOf({ key, strategy, param, multi: meta.multi }) : void 0,
-      refs: 0
-    });
-    ids.push(id);
-  }
-  notify();
-  return () => {
-    for (const id of ids) catalogue.delete(id);
-    notify();
-  };
-}
-var passthroughParam = {
-  encode: (v) => v === void 0 || v === null ? void 0 : String(v),
-  decode: (e) => e
-};
-function liveRegistrations(strategy) {
-  const all = [...live.values()];
-  return strategy ? all.filter((e) => e.strategy === strategy) : all;
-}
-function catalogueRegistrations(strategy) {
-  const all = [...catalogue.values()];
-  return strategy ? all.filter((e) => e.strategy === strategy) : all;
-}
-function __resetRegistry() {
-  live.clear();
-  catalogue.clear();
-  notify();
-}
-
-// src/diagnostics.ts
-function deprecatedKeysOf(spec) {
-  if (!spec) return [];
-  return Array.isArray(spec) ? [...spec] : Object.keys(spec);
-}
-function migrationFor(spec, key) {
-  if (!spec || Array.isArray(spec)) return null;
-  const v = spec[key];
-  return typeof v === "function" ? v : null;
-}
-var defaultOnDeprecated = ({ key, raw, migrated }) => {
-  if (migrated) {
-    console.warn(`[use-prms] migrated deprecated URL param "${key}"=${raw} \u2192`, migrated);
-  } else {
-    console.warn(`[use-prms] stripping deprecated URL param "${key}"=${raw}`);
-  }
-};
-function classifyParam(param, raw) {
-  if (raw === void 0) return { state: "absent" };
-  const decoded = param.decode(raw);
-  const reencoded = param.encode(decoded);
-  if (raw === reencoded) return { state: "canonical", raw };
-  const defaultEncoded = param.encode(param.decode(void 0));
-  if (reencoded === defaultEncoded) return { state: "malformed", raw, canonical: reencoded };
-  return { state: "stale", raw, canonical: reencoded };
-}
-function inspectUrl(params, options = {}, strategy = getDefaultStrategy()) {
-  const urlParams = strategy.parse();
-  const declared = new Set(Object.keys(params));
-  const deprecatedSet = new Set(
-    deprecatedKeysOf(options.deprecated).filter((k) => !declared.has(k))
-  );
-  const present = Object.keys(urlParams);
-  const unrecognized = present.filter((k) => !declared.has(k) && !deprecatedSet.has(k));
-  const deprecated = present.filter((k) => deprecatedSet.has(k));
-  const malformed = [];
-  const stale = [];
-  for (const key of declared) {
-    const raw = urlParams[key]?.[0];
-    const c = classifyParam(params[key], raw);
-    if (c.state === "malformed") malformed.push({ key, raw: c.raw, canonical: c.canonical });
-    else if (c.state === "stale") stale.push({ key, raw: c.raw, canonical: c.canonical });
-  }
-  return { unrecognized, deprecated, malformed, stale };
-}
-function cleanUrl(params, policy = {}, strategy = getDefaultStrategy()) {
-  const diag = inspectUrl(params, { deprecated: policy.deprecated }, strategy);
-  const {
-    unrecognized = "keep",
-    malformed = "keep",
-    stale = "keep",
-    deprecated: depSpec,
-    onDeprecated
-  } = policy;
-  const willStripUnrecognized = unrecognized === "strip" && diag.unrecognized.length > 0;
-  const willResetMalformed = malformed === "reset" && diag.malformed.length > 0;
-  const willNormalizeStale = stale === "normalize" && diag.stale.length > 0;
-  const willHandleDeprecated = diag.deprecated.length > 0;
-  if (!willStripUnrecognized && !willResetMalformed && !willNormalizeStale && !willHandleDeprecated) return diag;
-  if (typeof window === "undefined") return diag;
-  const current = strategy.parse();
-  const next = { ...current };
-  if (willStripUnrecognized) {
-    for (const k of diag.unrecognized) delete next[k];
-  }
-  const applyKeyed = (entries) => {
-    for (const { key, canonical } of entries) {
-      if (canonical === void 0) delete next[key];
-      else next[key] = [canonical];
-    }
-  };
-  if (willResetMalformed) applyKeyed(diag.malformed);
-  if (willNormalizeStale) applyKeyed(diag.stale);
-  if (willHandleDeprecated) {
-    const handler = onDeprecated === null ? null : onDeprecated ?? defaultOnDeprecated;
-    for (const key of diag.deprecated) {
-      const raw = current[key]?.[0] ?? "";
-      const migrate = migrationFor(depSpec, key);
-      let migrated;
-      if (migrate) {
-        migrated = migrate(raw);
-        for (const [mk, mv] of Object.entries(migrated)) {
-          const p = params[mk];
-          if (!p) continue;
-          const enc = p.encode(mv);
-          if (enc === void 0) delete next[mk];
-          else next[mk] = [enc];
-        }
-      }
-      delete next[key];
-      handler?.({ key, raw, ...migrated !== void 0 && { migrated } });
-    }
-  }
-  const url = new URL(window.location.href);
-  const updated = strategy.buildUrl(url, next);
-  window.history.replaceState({ ...window.history.state }, "", updated);
-  window.dispatchEvent(new PopStateEvent("popstate"));
-  return diag;
-}
-
-// src/useUrlState.ts
-function debounce(fn, ms2) {
-  let timeoutId = null;
-  const debounced = ((...args) => {
-    if (timeoutId) clearTimeout(timeoutId);
-    timeoutId = setTimeout(() => {
-      timeoutId = null;
-      fn(...args);
-    }, ms2);
-  });
-  debounced.cancel = () => {
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-      timeoutId = null;
-    }
-  };
-  return debounced;
-}
-var snapshotCache = /* @__PURE__ */ new WeakMap();
-function getSnapshot(strategy) {
-  const raw = strategy.getRaw();
-  const cached = snapshotCache.get(strategy);
-  if (cached && cached.raw === raw) {
-    return cached.snapshot;
-  }
-  const snapshot = strategy.parse();
-  snapshotCache.set(strategy, { raw, snapshot });
-  return snapshot;
-}
-function getServerSnapshot() {
-  return {};
-}
-function useParamRegistrations(strategy, specs) {
-  const sName = strategyName(strategy);
-  const specsRef = react.useRef(specs);
-  specsRef.current = specs;
-  const sig = specs.map((s) => s.key).join("\0");
-  react.useEffect(() => {
-    const disposers = specsRef.current.map((s) => registerParam({
-      key: s.key,
-      keys: s.keys,
-      strategy: sName,
-      param: s.param,
-      aliasParams: s.aliasParams,
-      multi: s.multi,
-      label: s.describe?.label,
-      description: s.describe?.description,
-      examples: s.describe?.examples
-    }));
-    return () => {
-      for (const d of disposers) d();
-    };
-  }, [sName, sig]);
-}
-function multiToSingle(multi) {
-  if (multi.length === 0) return void 0;
-  return multi[0];
-}
-function useUrlState(key, param, options = {}) {
-  const opts = typeof options === "boolean" ? { push: options } : options;
-  const { debounce: debounceMs = 0, push = false, onDiagnostic } = opts;
-  const strategy = getDefaultStrategy();
-  const paramRef = react.useRef(param);
-  paramRef.current = param;
-  useParamRegistrations(strategy, [{ key, param, describe: opts.describe }]);
-  const [, forceUpdate] = react.useReducer((c) => c + 1, 0);
-  const lastWrittenRef = react.useRef(null);
-  const pendingRef = react.useRef(null);
-  const debouncedWriteRef = react.useRef(null);
-  const urlParams = react.useSyncExternalStore(
-    (cb) => strategy.subscribe(cb),
-    () => getSnapshot(strategy),
-    getServerSnapshot
-  );
-  const encoded = multiToSingle(urlParams[key] ?? []);
-  const cacheRef = react.useRef(null);
-  const raw = strategy.getRaw();
-  let value;
-  if (pendingRef.current) {
-    if (raw !== pendingRef.current.prevRaw) {
-      pendingRef.current = null;
-      debouncedWriteRef.current?.cancel();
-      if (cacheRef.current === null || cacheRef.current.encoded !== encoded || cacheRef.current.param !== param) {
-        cacheRef.current = { encoded, param, decoded: param.decode(encoded) };
-      }
-      value = cacheRef.current.decoded;
-      lastWrittenRef.current = null;
-    } else {
-      value = pendingRef.current.decoded;
-    }
-  } else if (lastWrittenRef.current && lastWrittenRef.current.encoded === encoded) {
-    value = lastWrittenRef.current.decoded;
-  } else {
-    if (cacheRef.current === null || cacheRef.current.encoded !== encoded || cacheRef.current.param !== param) {
-      cacheRef.current = { encoded, param, decoded: param.decode(encoded) };
-    }
-    value = cacheRef.current.decoded;
-    lastWrittenRef.current = null;
-  }
-  const writeToUrl = react.useCallback(
-    (newValue, newEncoded) => {
-      if (typeof window === "undefined") return;
-      const currentParams = strategy.parse();
-      if (newEncoded === void 0) {
-        delete currentParams[key];
-      } else {
-        currentParams[key] = [newEncoded];
-      }
-      const url = new URL(window.location.href);
-      const newUrl = strategy.buildUrl(url, currentParams);
-      const method = push ? "pushState" : "replaceState";
-      window.history[method]({ ...window.history.state }, "", newUrl);
-      window.dispatchEvent(new PopStateEvent("popstate"));
-    },
-    [key, push, strategy]
-  );
-  react.useEffect(() => {
-    if (debounceMs > 0) {
-      debouncedWriteRef.current = debounce(
-        (...args) => {
-          writeToUrl(...args);
-          pendingRef.current = null;
-        },
-        debounceMs
-      );
-    } else {
-      debouncedWriteRef.current = null;
-    }
-    return () => {
-      debouncedWriteRef.current?.cancel();
-    };
-  }, [debounceMs, writeToUrl]);
-  const setValue = react.useCallback(
-    (newValue) => {
-      const newEncoded = paramRef.current.encode(newValue);
-      lastWrittenRef.current = { encoded: newEncoded, decoded: newValue };
-      if (debouncedWriteRef.current) {
-        pendingRef.current = { decoded: newValue, prevRaw: strategy.getRaw() };
-        debouncedWriteRef.current(newValue, newEncoded);
-        forceUpdate();
-      } else {
-        writeToUrl(newValue, newEncoded);
-      }
-    },
-    [writeToUrl, strategy, forceUpdate]
-  );
-  const diagnostic = classifyParam(param, encoded);
-  const lastDiagSigRef = react.useRef(null);
-  react.useEffect(() => {
-    if (!onDiagnostic) return;
-    const sig = JSON.stringify(diagnostic);
-    if (sig === lastDiagSigRef.current) return;
-    lastDiagSigRef.current = sig;
-    onDiagnostic(diagnostic);
-  });
-  return [value, setValue, diagnostic];
-}
-function useUrlStates(params, options = {}) {
-  const opts = typeof options === "boolean" ? { push: options } : options;
-  const { debounce: debounceMs = 0, push = false, onDiagnostics, cleanOnMount } = opts;
-  const strategy = getDefaultStrategy();
-  useParamRegistrations(
-    strategy,
-    Object.entries(params).map(([key, param]) => ({ key, param, describe: opts.describe?.[key] }))
-  );
-  const [, forceUpdate] = react.useReducer((c) => c + 1, 0);
-  const lastWrittenRef = react.useRef({});
-  const pendingRef = react.useRef(null);
-  const debouncedWriteRef = react.useRef(null);
-  const urlParams = react.useSyncExternalStore(
-    (cb) => strategy.subscribe(cb),
-    () => getSnapshot(strategy),
-    getServerSnapshot
-  );
-  const raw = strategy.getRaw();
-  let values;
-  if (pendingRef.current) {
-    if (raw !== pendingRef.current.prevRaw) {
-      pendingRef.current = null;
-      debouncedWriteRef.current?.cancel();
-      lastWrittenRef.current = {};
-      values = Object.fromEntries(
-        Object.entries(params).map(([key, param]) => {
-          const encoded = multiToSingle(urlParams[key] ?? []);
-          return [key, param.decode(encoded)];
-        })
-      );
-    } else {
-      values = Object.fromEntries(
-        Object.entries(params).map(([key, param]) => {
-          if (key in pendingRef.current.values) {
-            return [key, pendingRef.current.values[key]];
-          }
-          const encoded = multiToSingle(urlParams[key] ?? []);
-          const lastWritten = lastWrittenRef.current[key];
-          if (lastWritten && lastWritten.encoded === encoded) {
-            return [key, lastWritten.decoded];
-          }
-          return [key, param.decode(encoded)];
-        })
-      );
-    }
-  } else {
-    values = Object.fromEntries(
-      Object.entries(params).map(([key, param]) => {
-        const encoded = multiToSingle(urlParams[key] ?? []);
-        const lastWritten = lastWrittenRef.current[key];
-        if (lastWritten && lastWritten.encoded === encoded) {
-          return [key, lastWritten.decoded];
-        } else {
-          const decoded = param.decode(encoded);
-          delete lastWrittenRef.current[key];
-          return [key, decoded];
-        }
-      })
-    );
-  }
-  const writeToUrl = react.useCallback(
-    (updates) => {
-      if (typeof window === "undefined") return;
-      const currentParams = strategy.parse();
-      for (const [key, { encoded }] of Object.entries(updates)) {
-        if (encoded === void 0) {
-          delete currentParams[key];
-        } else {
-          currentParams[key] = [encoded];
-        }
-      }
-      const url = new URL(window.location.href);
-      const newUrl = strategy.buildUrl(url, currentParams);
-      const method = push ? "pushState" : "replaceState";
-      window.history[method]({ ...window.history.state }, "", newUrl);
-      window.dispatchEvent(new PopStateEvent("popstate"));
-    },
-    [push, strategy]
-  );
-  react.useEffect(() => {
-    if (debounceMs > 0) {
-      debouncedWriteRef.current = debounce(
-        (...args) => {
-          writeToUrl(...args);
-          pendingRef.current = null;
-        },
-        debounceMs
-      );
-    } else {
-      debouncedWriteRef.current = null;
-    }
-    return () => {
-      debouncedWriteRef.current?.cancel();
-    };
-  }, [debounceMs, writeToUrl]);
-  const setValues = react.useCallback(
-    (updates) => {
-      const encodedUpdates = {};
-      for (const [key, value] of Object.entries(updates)) {
-        const param = params[key];
-        if (!param) continue;
-        const encoded = param.encode(value);
-        encodedUpdates[key] = { encoded, decoded: value };
-        lastWrittenRef.current[key] = { encoded, decoded: value };
-      }
-      if (debouncedWriteRef.current) {
-        const pendingValues = pendingRef.current?.values ?? {};
-        for (const [key, value] of Object.entries(updates)) {
-          pendingValues[key] = value;
-        }
-        pendingRef.current = { values: pendingValues, prevRaw: strategy.getRaw() };
-        debouncedWriteRef.current(encodedUpdates);
-        forceUpdate();
-      } else {
-        writeToUrl(encodedUpdates);
-      }
-    },
-    [params, writeToUrl, strategy, forceUpdate]
-  );
-  const diagnostics = inspectUrl(params, { deprecated: cleanOnMount?.deprecated }, strategy);
-  const lastDiagSigRef = react.useRef(null);
-  react.useEffect(() => {
-    if (!onDiagnostics) return;
-    const sig = JSON.stringify(diagnostics);
-    if (sig === lastDiagSigRef.current) return;
-    lastDiagSigRef.current = sig;
-    onDiagnostics(diagnostics);
-  });
-  react.useEffect(() => {
-    if (cleanOnMount) cleanUrl(params, cleanOnMount, strategy);
-  }, []);
-  return { values, setValues, diagnostics };
-}
-function useMultiUrlState(key, param, options = {}) {
-  const opts = typeof options === "boolean" ? { push: options } : options;
-  const { debounce: debounceMs = 0, push = false } = opts;
-  const strategy = getDefaultStrategy();
-  const paramRef = react.useRef(param);
-  paramRef.current = param;
-  useParamRegistrations(strategy, [{ key, param, multi: true, describe: opts.describe }]);
-  const [, forceUpdate] = react.useReducer((c) => c + 1, 0);
-  const lastWrittenRef = react.useRef(null);
-  const pendingRef = react.useRef(null);
-  const debouncedWriteRef = react.useRef(null);
-  const urlParams = react.useSyncExternalStore(
-    (cb) => strategy.subscribe(cb),
-    () => getSnapshot(strategy),
-    getServerSnapshot
-  );
-  const encoded = urlParams[key] ?? [];
-  const raw = strategy.getRaw();
-  let value;
-  if (pendingRef.current) {
-    if (raw !== pendingRef.current.prevRaw) {
-      pendingRef.current = null;
-      debouncedWriteRef.current?.cancel();
-      value = param.decode(encoded);
-      lastWrittenRef.current = null;
-    } else {
-      value = pendingRef.current.decoded;
-    }
-  } else if (lastWrittenRef.current && arraysEqual2(lastWrittenRef.current.encoded, encoded)) {
-    value = lastWrittenRef.current.decoded;
-  } else {
-    value = param.decode(encoded);
-    lastWrittenRef.current = null;
-  }
-  const writeToUrl = react.useCallback(
-    (newEncoded) => {
-      if (typeof window === "undefined") return;
-      const currentParams = strategy.parse();
-      if (newEncoded.length === 0) {
-        delete currentParams[key];
-      } else {
-        currentParams[key] = newEncoded;
-      }
-      const url = new URL(window.location.href);
-      const newUrl = strategy.buildUrl(url, currentParams);
-      const method = push ? "pushState" : "replaceState";
-      window.history[method]({ ...window.history.state }, "", newUrl);
-      window.dispatchEvent(new PopStateEvent("popstate"));
-    },
-    [key, push, strategy]
-  );
-  react.useEffect(() => {
-    if (debounceMs > 0) {
-      debouncedWriteRef.current = debounce(
-        (...args) => {
-          writeToUrl(...args);
-          pendingRef.current = null;
-        },
-        debounceMs
-      );
-    } else {
-      debouncedWriteRef.current = null;
-    }
-    return () => {
-      debouncedWriteRef.current?.cancel();
-    };
-  }, [debounceMs, writeToUrl]);
-  const setValue = react.useCallback(
-    (newValue) => {
-      const newEncoded = paramRef.current.encode(newValue);
-      lastWrittenRef.current = { encoded: newEncoded, decoded: newValue };
-      if (debouncedWriteRef.current) {
-        pendingRef.current = { decoded: newValue, prevRaw: strategy.getRaw() };
-        debouncedWriteRef.current(newEncoded);
-        forceUpdate();
-      } else {
-        writeToUrl(newEncoded);
-      }
-    },
-    [writeToUrl, strategy, forceUpdate]
-  );
-  return [value, setValue];
-}
 function arraysEqual2(a, b) {
   return a.length === b.length && a.every((v, i) => v === b[i]);
-}
-function useMultiUrlStates(params, options = {}) {
-  const opts = typeof options === "boolean" ? { push: options } : options;
-  const { debounce: debounceMs = 0, push = false } = opts;
-  const strategy = getDefaultStrategy();
-  useParamRegistrations(
-    strategy,
-    Object.keys(params).map((key) => ({ key, param: params[key], multi: true }))
-  );
-  const [, forceUpdate] = react.useReducer((c) => c + 1, 0);
-  const lastWrittenRef = react.useRef({});
-  const pendingRef = react.useRef(null);
-  const debouncedWriteRef = react.useRef(null);
-  const urlParams = react.useSyncExternalStore(
-    (cb) => strategy.subscribe(cb),
-    () => getSnapshot(strategy),
-    getServerSnapshot
-  );
-  const raw = strategy.getRaw();
-  let values;
-  if (pendingRef.current) {
-    if (raw !== pendingRef.current.prevRaw) {
-      pendingRef.current = null;
-      debouncedWriteRef.current?.cancel();
-      lastWrittenRef.current = {};
-      values = Object.fromEntries(
-        Object.entries(params).map(([key, param]) => {
-          return [key, param.decode(urlParams[key] ?? [])];
-        })
-      );
-    } else {
-      values = Object.fromEntries(
-        Object.entries(params).map(([key, param]) => {
-          if (key in pendingRef.current.values) {
-            return [key, pendingRef.current.values[key]];
-          }
-          const encoded = urlParams[key] ?? [];
-          const lastWritten = lastWrittenRef.current[key];
-          if (lastWritten && arraysEqual2(lastWritten.encoded, encoded)) {
-            return [key, lastWritten.decoded];
-          }
-          return [key, param.decode(encoded)];
-        })
-      );
-    }
-  } else {
-    values = Object.fromEntries(
-      Object.entries(params).map(([key, param]) => {
-        const encoded = urlParams[key] ?? [];
-        const lastWritten = lastWrittenRef.current[key];
-        if (lastWritten && arraysEqual2(lastWritten.encoded, encoded)) {
-          return [key, lastWritten.decoded];
-        } else {
-          const decoded = param.decode(encoded);
-          delete lastWrittenRef.current[key];
-          return [key, decoded];
-        }
-      })
-    );
-  }
-  const writeToUrl = react.useCallback(
-    (updates) => {
-      if (typeof window === "undefined") return;
-      const currentParams = strategy.parse();
-      for (const [key, encoded] of Object.entries(updates)) {
-        if (encoded.length === 0) {
-          delete currentParams[key];
-        } else {
-          currentParams[key] = encoded;
-        }
-      }
-      const url = new URL(window.location.href);
-      const newUrl = strategy.buildUrl(url, currentParams);
-      const method = push ? "pushState" : "replaceState";
-      window.history[method]({ ...window.history.state }, "", newUrl);
-      window.dispatchEvent(new PopStateEvent("popstate"));
-    },
-    [push, strategy]
-  );
-  react.useEffect(() => {
-    if (debounceMs > 0) {
-      debouncedWriteRef.current = debounce(
-        (...args) => {
-          writeToUrl(...args);
-          pendingRef.current = null;
-        },
-        debounceMs
-      );
-    } else {
-      debouncedWriteRef.current = null;
-    }
-    return () => {
-      debouncedWriteRef.current?.cancel();
-    };
-  }, [debounceMs, writeToUrl]);
-  const setValues = react.useCallback(
-    (updates) => {
-      const encodedUpdates = {};
-      for (const [key, value] of Object.entries(updates)) {
-        const param = params[key];
-        if (!param) continue;
-        const encoded = param.encode(value);
-        encodedUpdates[key] = encoded;
-        lastWrittenRef.current[key] = { encoded, decoded: value };
-      }
-      if (debouncedWriteRef.current) {
-        const pendingValues = pendingRef.current?.values ?? {};
-        for (const [key, value] of Object.entries(updates)) {
-          pendingValues[key] = value;
-        }
-        pendingRef.current = { values: pendingValues, prevRaw: strategy.getRaw() };
-        debouncedWriteRef.current(encodedUpdates);
-        forceUpdate();
-      } else {
-        writeToUrl(encodedUpdates);
-      }
-    },
-    [params, writeToUrl, strategy, forceUpdate]
-  );
-  return { values, setValues };
-}
-var snapshotCache2 = /* @__PURE__ */ new WeakMap();
-function getSnapshot2(strategy) {
-  const raw = strategy.getRaw();
-  const cached = snapshotCache2.get(strategy);
-  if (cached && cached.raw === raw) return cached.snapshot;
-  const snapshot = strategy.parse();
-  snapshotCache2.set(strategy, { raw, snapshot });
-  return snapshot;
-}
-function getServerSnapshot2() {
-  return {};
-}
-function handleConflict(err, mode) {
-  if (mode === "throw") throw err;
-  if (mode === "warn") {
-    console.warn(`[use-prms] useUrlAlias: ${err.message}`);
-    return;
-  }
-  mode(err);
-}
-function useUrlAlias(input) {
-  const {
-    keys,
-    params,
-    merge,
-    onConflict = "warn",
-    canonicalizeOnMount = true
-  } = input;
-  const canonicalKey = keys[0];
-  const aliasKeys = keys.slice(1);
-  const strategy = getDefaultStrategy();
-  const sName = strategyName(strategy);
-  const regRef = react.useRef({ params, describe: input.describe });
-  regRef.current = { params, describe: input.describe };
-  const keysSig = keys.join("\0");
-  react.useEffect(() => {
-    return registerParam({
-      key: canonicalKey,
-      keys: [...keys],
-      strategy: sName,
-      param: regRef.current.params[canonicalKey],
-      aliasParams: regRef.current.params,
-      label: regRef.current.describe?.label,
-      description: regRef.current.describe?.description,
-      examples: regRef.current.describe?.examples
-    });
-  }, [sName, canonicalKey, keysSig]);
-  const urlParams = react.useSyncExternalStore(
-    (cb) => strategy.subscribe(cb),
-    () => getSnapshot2(strategy),
-    getServerSnapshot2
-  );
-  const lastWrittenRef = react.useRef(null);
-  const rawValues = {};
-  const decodedValues = {};
-  for (const k of keys) {
-    const enc = urlParams[k]?.[0];
-    rawValues[k] = enc;
-    decodedValues[k] = params[k].decode(enc);
-  }
-  const canonicalEnc = rawValues[canonicalKey];
-  const aliasesAbsent = aliasKeys.every((k) => rawValues[k] === void 0);
-  let value;
-  const lastWritten = lastWrittenRef.current;
-  if (lastWritten && lastWritten.canonicalEncoded === canonicalEnc && aliasesAbsent) {
-    value = lastWritten.value;
-  } else {
-    lastWrittenRef.current = null;
-    let result;
-    try {
-      result = merge(decodedValues);
-    } catch (e) {
-      result = e instanceof Error ? e : new Error(String(e));
-    }
-    if (result instanceof Error) {
-      handleConflict(result, onConflict);
-      value = decodedValues[canonicalKey];
-    } else {
-      value = result;
-    }
-  }
-  const writeToUrl = react.useCallback(
-    (canonicalEncoded) => {
-      if (typeof window === "undefined") return;
-      const current = strategy.parse();
-      const next = { ...current };
-      if (canonicalEncoded === void 0) delete next[canonicalKey];
-      else next[canonicalKey] = [canonicalEncoded];
-      for (const k of aliasKeys) delete next[k];
-      const url = new URL(window.location.href);
-      const newUrl = strategy.buildUrl(url, next);
-      window.history.replaceState({ ...window.history.state }, "", newUrl);
-      window.dispatchEvent(new PopStateEvent("popstate"));
-    },
-    [canonicalKey, aliasKeys.join("\0"), strategy]
-    // eslint-disable-line react-hooks/exhaustive-deps
-  );
-  const setValue = react.useCallback(
-    (v) => {
-      const enc = params[canonicalKey].encode(v);
-      lastWrittenRef.current = { canonicalEncoded: enc, value: v };
-      writeToUrl(enc);
-    },
-    [params, canonicalKey, writeToUrl]
-  );
-  const canonicalizedRef = react.useRef(false);
-  react.useEffect(() => {
-    if (!canonicalizeOnMount || canonicalizedRef.current) return;
-    canonicalizedRef.current = true;
-    const targetEnc = params[canonicalKey].encode(value);
-    const canonicalMatches = targetEnc === canonicalEnc;
-    if (canonicalMatches && aliasesAbsent) return;
-    lastWrittenRef.current = { canonicalEncoded: targetEnc, value };
-    writeToUrl(targetEnc);
-  }, []);
-  return [value, setValue];
 }
 
 // src/flagPack.ts
@@ -2298,6 +1658,505 @@ function tagFilterParam(options = {}) {
     }
   };
 }
+
+// src/diagnostics.ts
+function deprecatedKeysOf(spec) {
+  if (!spec) return [];
+  return Array.isArray(spec) ? [...spec] : Object.keys(spec);
+}
+function migrationFor(spec, key) {
+  if (!spec || Array.isArray(spec)) return null;
+  const v = spec[key];
+  return typeof v === "function" ? v : null;
+}
+var defaultOnDeprecated = ({ key, raw, migrated }) => {
+  if (migrated) {
+    console.warn(`[use-prms] migrated deprecated URL param "${key}"=${raw} \u2192`, migrated);
+  } else {
+    console.warn(`[use-prms] stripping deprecated URL param "${key}"=${raw}`);
+  }
+};
+function classifyParam(param, raw) {
+  if (raw === void 0) return { state: "absent" };
+  const decoded = param.decode(raw);
+  const reencoded = param.encode(decoded);
+  if (raw === reencoded) return { state: "canonical", raw };
+  const defaultEncoded = param.encode(param.decode(void 0));
+  if (reencoded === defaultEncoded) return { state: "malformed", raw, canonical: reencoded };
+  return { state: "stale", raw, canonical: reencoded };
+}
+function inspectUrl(params, options = {}, strategy = getDefaultStrategy()) {
+  const urlParams = strategy.parse();
+  const declared = new Set(Object.keys(params));
+  const deprecatedSet = new Set(
+    deprecatedKeysOf(options.deprecated).filter((k) => !declared.has(k))
+  );
+  const present = Object.keys(urlParams);
+  const unrecognized = present.filter((k) => !declared.has(k) && !deprecatedSet.has(k));
+  const deprecated = present.filter((k) => deprecatedSet.has(k));
+  const malformed = [];
+  const stale = [];
+  for (const key of declared) {
+    const raw = urlParams[key]?.[0];
+    const c = classifyParam(params[key], raw);
+    if (c.state === "malformed") malformed.push({ key, raw: c.raw, canonical: c.canonical });
+    else if (c.state === "stale") stale.push({ key, raw: c.raw, canonical: c.canonical });
+  }
+  return { unrecognized, deprecated, malformed, stale };
+}
+function cleanUrl(params, policy = {}, strategy = getDefaultStrategy()) {
+  const diag = inspectUrl(params, { deprecated: policy.deprecated }, strategy);
+  const {
+    unrecognized = "keep",
+    malformed = "keep",
+    stale = "keep",
+    deprecated: depSpec,
+    onDeprecated
+  } = policy;
+  const willStripUnrecognized = unrecognized === "strip" && diag.unrecognized.length > 0;
+  const willResetMalformed = malformed === "reset" && diag.malformed.length > 0;
+  const willNormalizeStale = stale === "normalize" && diag.stale.length > 0;
+  const willHandleDeprecated = diag.deprecated.length > 0;
+  if (!willStripUnrecognized && !willResetMalformed && !willNormalizeStale && !willHandleDeprecated) return diag;
+  if (typeof window === "undefined") return diag;
+  const current = strategy.parse();
+  const next = { ...current };
+  if (willStripUnrecognized) {
+    for (const k of diag.unrecognized) delete next[k];
+  }
+  const applyKeyed = (entries) => {
+    for (const { key, canonical } of entries) {
+      if (canonical === void 0) delete next[key];
+      else next[key] = [canonical];
+    }
+  };
+  if (willResetMalformed) applyKeyed(diag.malformed);
+  if (willNormalizeStale) applyKeyed(diag.stale);
+  if (willHandleDeprecated) {
+    const handler = onDeprecated === null ? null : onDeprecated ?? defaultOnDeprecated;
+    for (const key of diag.deprecated) {
+      const raw = current[key]?.[0] ?? "";
+      const migrate = migrationFor(depSpec, key);
+      let migrated;
+      if (migrate) {
+        migrated = migrate(raw);
+        for (const [mk, mv] of Object.entries(migrated)) {
+          const p = params[mk];
+          if (!p) continue;
+          const enc = p.encode(mv);
+          if (enc === void 0) delete next[mk];
+          else next[mk] = [enc];
+        }
+      }
+      delete next[key];
+      handler?.({ key, raw, ...migrated !== void 0 && { migrated } });
+    }
+  }
+  const url = new URL(window.location.href);
+  const updated = strategy.buildUrl(url, next);
+  window.history.replaceState({ ...window.history.state }, "", updated);
+  window.dispatchEvent(new PopStateEvent("popstate"));
+  return diag;
+}
+
+// src/registry.ts
+function strategyName(strategy) {
+  return strategy === hashStrategy ? "hash" : "query";
+}
+var live = /* @__PURE__ */ new Map();
+var catalogue = /* @__PURE__ */ new Map();
+var listeners = /* @__PURE__ */ new Set();
+var idOf = (strategy, key) => `${strategy}::${key}`;
+function notify() {
+  for (const cb of listeners) cb();
+}
+function onRegistryChange(cb) {
+  listeners.add(cb);
+  return () => {
+    listeners.delete(cb);
+  };
+}
+function defaultEncodedOf(input) {
+  if (input.multi) return void 0;
+  try {
+    return input.param.encode(input.param.decode(void 0));
+  } catch {
+    return void 0;
+  }
+}
+function registerParam(input) {
+  const id = idOf(input.strategy, input.key);
+  const existing = live.get(id);
+  if (existing) {
+    existing.refs += 1;
+  } else {
+    live.set(id, {
+      key: input.key,
+      keys: input.keys ?? [input.key],
+      strategy: input.strategy,
+      param: input.param,
+      aliasParams: input.aliasParams,
+      multi: input.multi ?? false,
+      label: input.label,
+      description: input.description,
+      examples: input.examples,
+      defaultEncoded: defaultEncodedOf(input),
+      refs: 1
+    });
+  }
+  notify();
+  let disposed = false;
+  return () => {
+    if (disposed) return;
+    disposed = true;
+    const entry = live.get(id);
+    if (!entry) return;
+    entry.refs -= 1;
+    if (entry.refs <= 0) live.delete(id);
+    notify();
+  };
+}
+function describeParams(entries, opts = {}) {
+  const strategy = opts.strategy ?? "query";
+  const ids = [];
+  for (const [key, meta] of Object.entries(entries)) {
+    const id = idOf(strategy, key);
+    const param = meta.param ?? passthroughParam;
+    catalogue.set(id, {
+      key,
+      keys: [key],
+      strategy,
+      param,
+      multi: meta.multi ?? false,
+      label: meta.label,
+      description: meta.description,
+      examples: meta.examples,
+      defaultEncoded: meta.param ? defaultEncodedOf({ key, strategy, param, multi: meta.multi }) : void 0,
+      refs: 0
+    });
+    ids.push(id);
+  }
+  notify();
+  return () => {
+    for (const id of ids) catalogue.delete(id);
+    notify();
+  };
+}
+var passthroughParam = {
+  encode: (v) => v === void 0 || v === null ? void 0 : String(v),
+  decode: (e) => e
+};
+function liveRegistrations(strategy) {
+  const all = [...live.values()];
+  return strategy ? all.filter((e) => e.strategy === strategy) : all;
+}
+function catalogueRegistrations(strategy) {
+  const all = [...catalogue.values()];
+  return strategy ? all.filter((e) => e.strategy === strategy) : all;
+}
+function __resetRegistry() {
+  live.clear();
+  catalogue.clear();
+  notify();
+}
+
+// src/core.ts
+function serializeParams(params) {
+  const searchParams = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value === void 0) {
+      continue;
+    } else if (value === "") {
+      continue;
+    } else {
+      searchParams.set(key, value);
+    }
+  }
+  let result = searchParams.toString();
+  const valuelessKeys = Object.entries(params).filter(([_, value]) => value === "").map(([key, _]) => encodeURIComponent(key));
+  if (valuelessKeys.length > 0) {
+    const valuelessPart = valuelessKeys.join("&");
+    result = result ? `${result}&${valuelessPart}` : valuelessPart;
+  }
+  return result;
+}
+function parseParams(source) {
+  const searchParams = typeof source === "string" ? new URLSearchParams(source) : source;
+  const result = {};
+  for (const [key, value] of searchParams.entries()) {
+    if (!(key in result)) {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+function getCurrentParams() {
+  if (typeof window === "undefined") return {};
+  return parseParams(window.location.search);
+}
+function updateUrl(params, push = false) {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  const search = serializeParams(params);
+  url.search = search;
+  const method = push ? "pushState" : "replaceState";
+  window.history[method]({ ...window.history.state }, "", url.toString());
+  window.dispatchEvent(new PopStateEvent("popstate"));
+}
+function useParamRegistrations(strategy, specs) {
+  const sName = strategyName(strategy);
+  const specsRef = react.useRef(specs);
+  specsRef.current = specs;
+  const sig = specs.map((s) => s.key).join("\0");
+  react.useEffect(() => {
+    const disposers = specsRef.current.map((s) => registerParam({
+      key: s.key,
+      keys: s.keys,
+      strategy: sName,
+      param: s.param,
+      aliasParams: s.aliasParams,
+      multi: s.multi,
+      label: s.describe?.label,
+      description: s.describe?.description,
+      examples: s.describe?.examples
+    }));
+    return () => {
+      for (const d of disposers) d();
+    };
+  }, [sName, sig]);
+}
+function useUrlBinding(codecs, push, debounceMs) {
+  const strategy = getDefaultStrategy();
+  const [, forceUpdate] = react.useReducer((c) => c + 1, 0);
+  const bindingRef = react.useRef(null);
+  const strategyRef = react.useRef(strategy);
+  if (bindingRef.current === null || strategyRef.current !== strategy) {
+    bindingRef.current = new UrlBinding(strategy, forceUpdate);
+    strategyRef.current = strategy;
+  }
+  const binding = bindingRef.current;
+  binding.setCodecs(codecs);
+  binding.setPush(push);
+  const snapshot = react.useSyncExternalStore(
+    (cb) => strategy.subscribe(cb),
+    () => getUrlSnapshot(strategy),
+    getServerSnapshot
+  );
+  const values = binding.read(snapshot);
+  react.useEffect(() => {
+    binding.setDebounce(debounceMs);
+    return () => binding.dispose();
+  }, [binding, debounceMs]);
+  const write = react.useCallback((v) => binding.write(v), [binding]);
+  return { values, write, snapshot };
+}
+function useUrlState(key, param, options = {}) {
+  const opts = typeof options === "boolean" ? { push: options } : options;
+  const { debounce: debounceMs = 0, push = false, onDiagnostic } = opts;
+  const strategy = getDefaultStrategy();
+  useParamRegistrations(strategy, [{ key, param, describe: opts.describe }]);
+  const codec = react.useMemo(() => toMultiCodec(param), [param]);
+  const codecs = react.useMemo(() => ({ [key]: codec }), [key, codec]);
+  const { values, write, snapshot } = useUrlBinding(codecs, push, debounceMs);
+  const value = values[key];
+  const setValue = react.useCallback((v) => write({ [key]: v }), [write, key]);
+  const encoded = multiToSingle(snapshot[key] ?? []);
+  const diagnostic = classifyParam(param, encoded);
+  const lastDiagSigRef = react.useRef(null);
+  react.useEffect(() => {
+    if (!onDiagnostic) return;
+    const sig = JSON.stringify(diagnostic);
+    if (sig === lastDiagSigRef.current) return;
+    lastDiagSigRef.current = sig;
+    onDiagnostic(diagnostic);
+  });
+  return [value, setValue, diagnostic];
+}
+function useUrlStates(params, options = {}) {
+  const opts = typeof options === "boolean" ? { push: options } : options;
+  const { debounce: debounceMs = 0, push = false, onDiagnostics, cleanOnMount } = opts;
+  const strategy = getDefaultStrategy();
+  useParamRegistrations(
+    strategy,
+    Object.entries(params).map(([key, param]) => ({ key, param, describe: opts.describe?.[key] }))
+  );
+  const codecs = react.useMemo(
+    () => Object.fromEntries(
+      Object.entries(params).map(([key, param]) => [key, toMultiCodec(param)])
+    ),
+    [params]
+  );
+  const { values: rawValues, write } = useUrlBinding(codecs, push, debounceMs);
+  const values = rawValues;
+  const setValues = react.useCallback(
+    (updates) => write(updates),
+    [write]
+  );
+  const diagnostics = inspectUrl(params, { deprecated: cleanOnMount?.deprecated }, strategy);
+  const lastDiagSigRef = react.useRef(null);
+  react.useEffect(() => {
+    if (!onDiagnostics) return;
+    const sig = JSON.stringify(diagnostics);
+    if (sig === lastDiagSigRef.current) return;
+    lastDiagSigRef.current = sig;
+    onDiagnostics(diagnostics);
+  });
+  react.useEffect(() => {
+    if (cleanOnMount) cleanUrl(params, cleanOnMount, strategy);
+  }, []);
+  return { values, setValues, diagnostics };
+}
+function useMultiUrlState(key, param, options = {}) {
+  const opts = typeof options === "boolean" ? { push: options } : options;
+  const { debounce: debounceMs = 0, push = false } = opts;
+  const strategy = getDefaultStrategy();
+  useParamRegistrations(strategy, [{ key, param, multi: true, describe: opts.describe }]);
+  const codecs = react.useMemo(
+    () => ({ [key]: param }),
+    [key, param]
+  );
+  const { values, write } = useUrlBinding(codecs, push, debounceMs);
+  const value = values[key];
+  const setValue = react.useCallback((v) => write({ [key]: v }), [write, key]);
+  return [value, setValue];
+}
+function useMultiUrlStates(params, options = {}) {
+  const opts = typeof options === "boolean" ? { push: options } : options;
+  const { debounce: debounceMs = 0, push = false } = opts;
+  const strategy = getDefaultStrategy();
+  useParamRegistrations(
+    strategy,
+    Object.keys(params).map((key) => ({ key, param: params[key], multi: true }))
+  );
+  const codecs = react.useMemo(
+    () => ({ ...params }),
+    [params]
+  );
+  const { values: rawValues, write } = useUrlBinding(codecs, push, debounceMs);
+  const values = rawValues;
+  const setValues = react.useCallback(
+    (updates) => write(updates),
+    [write]
+  );
+  return { values, setValues };
+}
+var snapshotCache2 = /* @__PURE__ */ new WeakMap();
+function getSnapshot(strategy) {
+  const raw = strategy.getRaw();
+  const cached = snapshotCache2.get(strategy);
+  if (cached && cached.raw === raw) return cached.snapshot;
+  const snapshot = strategy.parse();
+  snapshotCache2.set(strategy, { raw, snapshot });
+  return snapshot;
+}
+function getServerSnapshot2() {
+  return {};
+}
+function handleConflict(err, mode) {
+  if (mode === "throw") throw err;
+  if (mode === "warn") {
+    console.warn(`[use-prms] useUrlAlias: ${err.message}`);
+    return;
+  }
+  mode(err);
+}
+function useUrlAlias(input) {
+  const {
+    keys,
+    params,
+    merge,
+    onConflict = "warn",
+    canonicalizeOnMount = true
+  } = input;
+  const canonicalKey = keys[0];
+  const aliasKeys = keys.slice(1);
+  const strategy = getDefaultStrategy();
+  const sName = strategyName(strategy);
+  const regRef = react.useRef({ params, describe: input.describe });
+  regRef.current = { params, describe: input.describe };
+  const keysSig = keys.join("\0");
+  react.useEffect(() => {
+    return registerParam({
+      key: canonicalKey,
+      keys: [...keys],
+      strategy: sName,
+      param: regRef.current.params[canonicalKey],
+      aliasParams: regRef.current.params,
+      label: regRef.current.describe?.label,
+      description: regRef.current.describe?.description,
+      examples: regRef.current.describe?.examples
+    });
+  }, [sName, canonicalKey, keysSig]);
+  const urlParams = react.useSyncExternalStore(
+    (cb) => strategy.subscribe(cb),
+    () => getSnapshot(strategy),
+    getServerSnapshot2
+  );
+  const lastWrittenRef = react.useRef(null);
+  const rawValues = {};
+  const decodedValues = {};
+  for (const k of keys) {
+    const enc = urlParams[k]?.[0];
+    rawValues[k] = enc;
+    decodedValues[k] = params[k].decode(enc);
+  }
+  const canonicalEnc = rawValues[canonicalKey];
+  const aliasesAbsent = aliasKeys.every((k) => rawValues[k] === void 0);
+  let value;
+  const lastWritten = lastWrittenRef.current;
+  if (lastWritten && lastWritten.canonicalEncoded === canonicalEnc && aliasesAbsent) {
+    value = lastWritten.value;
+  } else {
+    lastWrittenRef.current = null;
+    let result;
+    try {
+      result = merge(decodedValues);
+    } catch (e) {
+      result = e instanceof Error ? e : new Error(String(e));
+    }
+    if (result instanceof Error) {
+      handleConflict(result, onConflict);
+      value = decodedValues[canonicalKey];
+    } else {
+      value = result;
+    }
+  }
+  const writeToUrl = react.useCallback(
+    (canonicalEncoded) => {
+      if (typeof window === "undefined") return;
+      const current = strategy.parse();
+      const next = { ...current };
+      if (canonicalEncoded === void 0) delete next[canonicalKey];
+      else next[canonicalKey] = [canonicalEncoded];
+      for (const k of aliasKeys) delete next[k];
+      const url = new URL(window.location.href);
+      const newUrl = strategy.buildUrl(url, next);
+      window.history.replaceState({ ...window.history.state }, "", newUrl);
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    },
+    [canonicalKey, aliasKeys.join("\0"), strategy]
+    // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  const setValue = react.useCallback(
+    (v) => {
+      const enc = params[canonicalKey].encode(v);
+      lastWrittenRef.current = { canonicalEncoded: enc, value: v };
+      writeToUrl(enc);
+    },
+    [params, canonicalKey, writeToUrl]
+  );
+  const canonicalizedRef = react.useRef(false);
+  react.useEffect(() => {
+    if (!canonicalizeOnMount || canonicalizedRef.current) return;
+    canonicalizedRef.current = true;
+    const targetEnc = params[canonicalKey].encode(value);
+    const canonicalMatches = targetEnc === canonicalEnc;
+    if (canonicalMatches && aliasesAbsent) return;
+    lastWrittenRef.current = { canonicalEncoded: targetEnc, value };
+    writeToUrl(targetEnc);
+  }, []);
+  return [value, setValue];
+}
 function resolveStrategy(opts) {
   return opts.strategy ?? strategyName(getDefaultStrategy());
 }
@@ -2390,55 +2249,12 @@ function useParamReflection(opts = {}) {
   );
 }
 
-// src/index.ts
-function serializeParams(params) {
-  const searchParams = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) {
-    if (value === void 0) {
-      continue;
-    } else if (value === "") {
-      continue;
-    } else {
-      searchParams.set(key, value);
-    }
-  }
-  let result = searchParams.toString();
-  const valuelessKeys = Object.entries(params).filter(([_, value]) => value === "").map(([key, _]) => encodeURIComponent(key));
-  if (valuelessKeys.length > 0) {
-    const valuelessPart = valuelessKeys.join("&");
-    result = result ? `${result}&${valuelessPart}` : valuelessPart;
-  }
-  return result;
-}
-function parseParams(source) {
-  const searchParams = typeof source === "string" ? new URLSearchParams(source) : source;
-  const result = {};
-  for (const [key, value] of searchParams.entries()) {
-    if (!(key in result)) {
-      result[key] = value;
-    }
-  }
-  return result;
-}
-function getCurrentParams() {
-  if (typeof window === "undefined") return {};
-  return parseParams(window.location.search);
-}
-function updateUrl(params, push = false) {
-  if (typeof window === "undefined") return;
-  const url = new URL(window.location.href);
-  const search = serializeParams(params);
-  url.search = search;
-  const method = push ? "pushState" : "replaceState";
-  window.history[method]({ ...window.history.state }, "", url.toString());
-  window.dispatchEvent(new PopStateEvent("popstate"));
-}
-
 exports.ALPHABETS = ALPHABETS;
 exports.BASE64_CHARS = BASE64_CHARS;
 exports.BitBuffer = BitBuffer;
 exports.DEFAULT_TAG_CYCLE = DEFAULT_TAG_CYCLE;
 exports.PRECISION_SCHEMES = precisionSchemes;
+exports.UrlBinding = UrlBinding;
 exports.__resetRegistry = __resetRegistry;
 exports.base64Decode = base64Decode;
 exports.base64Encode = base64Encode;
@@ -2473,14 +2289,18 @@ exports.fromFixedPoint = fromFixedPoint;
 exports.fromFloat = fromFloat;
 exports.getCurrentParams = getCurrentParams;
 exports.getDefaultStrategy = getDefaultStrategy;
+exports.getServerSnapshot = getServerSnapshot;
+exports.getUrlSnapshot = getUrlSnapshot;
 exports.hashStrategy = hashStrategy;
 exports.inspectUrl = inspectUrl;
 exports.intParam = intParam;
 exports.liveRegistrations = liveRegistrations;
 exports.llzParam = llzParam;
+exports.multiCodec = multiCodec;
 exports.multiFloatParam = multiFloatParam;
 exports.multiIntParam = multiIntParam;
 exports.multiStringParam = multiStringParam;
+exports.multiToSingle = multiToSingle;
 exports.notifyLocationChange = notifyLocationChange;
 exports.numberArrayParam = numberArrayParam;
 exports.numberTupleParam = numberTupleParam;
@@ -2504,12 +2324,14 @@ exports.runPassesTagFilters = runPassesTagFilters;
 exports.serializeMultiParams = serializeMultiParams;
 exports.serializeParams = serializeParams;
 exports.setDefaultStrategy = setDefaultStrategy;
+exports.singleToMulti = singleToMulti;
 exports.strategyName = strategyName;
 exports.stringParam = stringParam;
 exports.stringsParam = stringsParam;
 exports.tagFilterParam = tagFilterParam;
 exports.toFixedPoint = toFixedPoint;
 exports.toFloat = toFloat;
+exports.toMultiCodec = toMultiCodec;
 exports.updateUrl = updateUrl;
 exports.useMultiUrlState = useMultiUrlState;
 exports.useMultiUrlStates = useMultiUrlStates;
@@ -2519,5 +2341,6 @@ exports.useUrlState = useUrlState;
 exports.useUrlStates = useUrlStates;
 exports.validateAlphabet = validateAlphabet;
 exports.viewStateParam = viewStateParam;
+exports.writeParams = writeParams;
 //# sourceMappingURL=index.cjs.map
 //# sourceMappingURL=index.cjs.map
