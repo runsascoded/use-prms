@@ -114,20 +114,34 @@ var defaultReference = {
   topPx: 40
 };
 var clamp01 = (x) => x < 0 ? 0 : x > 1 ? 1 : x;
+function referenceLine(absTops, y, maxY, near, h, slidePx) {
+  let deepest = -Infinity;
+  let reachEnd = -Infinity;
+  for (const abs of absTops) {
+    const atBottom = abs - maxY;
+    if (atBottom > deepest) deepest = atBottom;
+    if (atBottom <= near) reachEnd = Math.max(reachEnd, abs - near);
+  }
+  const yEnd = Math.max(near, Math.min(h, deepest) + 1);
+  const bottom = maxY - 1;
+  const start = Math.max(0, maxY - slidePx, reachEnd);
+  if (yEnd <= near || start >= bottom) return y >= bottom ? yEnd : near;
+  return near + (yEnd - near) * clamp01((y - start) / (bottom - start));
+}
 function sectionInView(ids, ref) {
-  const off = ref.offset();
   const h = window.innerHeight;
+  const y = window.scrollY;
   const maxY = document.documentElement.scrollHeight - h;
-  const near = off + Math.min(h * ref.nearFrac, ref.nearPx);
-  const descend = Math.min(h - near, maxY, ref.slidePx);
-  const progress = maxY > 0 ? clamp01((window.scrollY - (maxY - descend)) / descend) : 0;
-  const yRef = near + (h - near) * progress;
-  let cur = "";
+  const near = ref.offset() + Math.min(h * ref.nearFrac, ref.nearPx);
+  const tops = [];
   for (const id of ids) {
     const el = document.getElementById(id);
-    if (el && el.getBoundingClientRect().top <= yRef) cur = id;
+    if (el) tops.push([id, el.getBoundingClientRect().top]);
   }
-  return window.scrollY < ref.topPx ? "" : cur;
+  const yRef = referenceLine(tops.map(([, top]) => top + y), y, maxY, near, h, ref.slidePx);
+  let cur = "";
+  for (const [id, top] of tops) if (top <= yRef) cur = id;
+  return y < ref.topPx ? "" : cur;
 }
 
 // src/sections/userScroll.ts
@@ -363,7 +377,13 @@ function useSectionSpy(opts = {}) {
   const windowNav = useWindowNav();
   const nav = opts.nav ?? windowNav;
   const { location, navType } = nav;
-  const resolved = useMemo(() => resolveMode(opts.mode), [opts.mode]);
+  const m = opts.mode;
+  const p = m?.kind === "param" ? m : void 0;
+  const resolved = useMemo(
+    () => resolveMode(m),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [m?.kind, p?.key, p?.location, p?.adoptFragment, p?.encode, p?.decode]
+  );
   const mode = resolved.mode;
   const write = opts.write ?? "replace";
   const jumpWrite = opts.jumpWrite ?? "replace";
@@ -460,19 +480,18 @@ function useSectionSpy(opts = {}) {
     const act = navScroll(from, next, navType, curLive, savedPosition(posCfg, k));
     prev.current = next;
     keyRef.current = k;
-    liveSection = next.section;
-    publishSection(next.section);
     if (act.kind === "none") {
-      if (next.section !== liveSection) silentReplaceState(history.state, "", sectionUrl(mode, liveSection));
+      if (write === "off" || next.section === curLive) publishSection(next.section);
+      else silentReplaceState(history.state, "", sectionUrl(mode, curLive));
       return;
     }
+    publishSection(next.section);
     resetUserScroll();
     target.current = act;
     if (act.kind === "top") {
       stopPursuit.current();
       window.scrollTo({ top: 0, behavior: "instant" });
       publishSection("");
-      liveSection = "";
       if (next.section) silentReplaceState(history.state, "", sectionUrl(mode, ""));
       savePosition(posCfg, k, 0);
       return;
@@ -524,6 +543,6 @@ function useSectionSpy(opts = {}) {
   }, [mode, write]);
 }
 
-export { SectionLink, isUserScroll, jumpToSection, navScroll, resetUserScroll, sectionHref, sectionInView, useSectionInView, useSectionSpy, useWindowNav, withoutSection };
+export { SectionLink, isUserScroll, jumpToSection, navScroll, referenceLine, resetUserScroll, sectionHref, sectionInView, useSectionInView, useSectionSpy, useWindowNav, withoutSection };
 //# sourceMappingURL=sections.js.map
 //# sourceMappingURL=sections.js.map

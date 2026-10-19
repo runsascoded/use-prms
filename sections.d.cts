@@ -53,19 +53,29 @@ interface ReferenceLine {
     /** Line sits `min(vh * nearFrac, nearPx)` below `offset`. Defaults 1/3, 150. */
     nearFrac?: number;
     nearPx?: number;
-    /** Width (px) of the bottom window over which the line slides to the viewport bottom. Default 280. */
+    /** Most scroll (px) the bottom slide may span. Default 280. */
     slidePx?: number;
     /** Above this scrollY, no section is "in view" (URL section cleared). Default 40. */
     topPx?: number;
 }
 /**
+ * The reference line's viewport y at scroll `y` (pure, for tests). It sits at
+ * `near` (just under the header) except over a short window at the very
+ * bottom, where it slides down to just past the deepest section top the page
+ * end leaves on screen, giving the sections that can never reach `near` a
+ * turn each, in order. The slide starts only after the last section that
+ * *can* reach `near` has done so (and at most `slidePx` before the bottom),
+ * so no section is named before its top meets the line on its own.
+ *
+ * `absTops` are document-space section tops. Within 1px of `maxY` counts as
+ * the bottom: `maxY` comes from the integer `scrollHeight`, and a fractional
+ * scroll can stop just short of it.
+ */
+declare function referenceLine(absTops: readonly number[], y: number, maxY: number, near: number, h: number, slidePx: number): number;
+/**
  * The section id the spy would name for the current scroll position, or `''`
- * at the very top. The reference line sits just under the header for most of
- * the page; over a short window at the very bottom — where the page-end stops
- * the last sections from ever reaching it — it slides to the viewport bottom,
- * giving each a turn. Confining that slide to `slidePx` keeps a short page, or
- * a scroll well above the bottom, from mis-naming a section two below the one
- * actually in view.
+ * at the very top: the last section (document order) whose top is at or
+ * above the {@link referenceLine}.
  */
 declare function sectionInView(ids: readonly string[], ref: Required<ReferenceLine>): string;
 
@@ -149,4 +159,4 @@ declare function SectionLink({ id, className, children }: {
 declare function useWindowNav(): NavSource;
 declare function useSectionSpy(opts?: SectionSpyOptions): void;
 
-export { type NavLocation, type NavScroll, type NavSection, type NavSource, type NavType, type ReferenceLine, SectionLink, type SectionMode, type SectionSpyOptions, isUserScroll, jumpToSection, navScroll, resetUserScroll, sectionHref, sectionInView, useSectionInView, useSectionSpy, useWindowNav, withoutSection };
+export { type NavLocation, type NavScroll, type NavSection, type NavSource, type NavType, type ReferenceLine, SectionLink, type SectionMode, type SectionSpyOptions, isUserScroll, jumpToSection, navScroll, referenceLine, resetUserScroll, sectionHref, sectionInView, useSectionInView, useSectionSpy, useWindowNav, withoutSection };
