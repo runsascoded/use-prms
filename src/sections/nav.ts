@@ -75,7 +75,7 @@ export interface ReferenceLine {
   /** Line sits `min(vh * nearFrac, nearPx)` below `offset`. Defaults 1/3, 150. */
   nearFrac?: number
   nearPx?: number
-  /** Width (px) of the bottom window over which the line slides to the viewport bottom. Default 280. */
+  /** Most scroll (px) the bottom slide may span. Default 280. */
   slidePx?: number
   /** Above this scrollY, no section is "in view" (URL section cleared). Default 40. */
   topPx?: number
@@ -92,26 +92,57 @@ export const defaultReference: Required<ReferenceLine> = {
 const clamp01 = (x: number): number => (x < 0 ? 0 : x > 1 ? 1 : x)
 
 /**
+ * The reference line's viewport y at scroll `y` (pure, for tests). It sits at
+ * `near` (just under the header) except over a short window at the very
+ * bottom, where it slides down to just past the deepest section top the page
+ * end leaves on screen, giving the sections that can never reach `near` a
+ * turn each, in order. The slide starts only after the last section that
+ * *can* reach `near` has done so (and at most `slidePx` before the bottom),
+ * so no section is named before its top meets the line on its own.
+ *
+ * `absTops` are document-space section tops. Within 1px of `maxY` counts as
+ * the bottom: `maxY` comes from the integer `scrollHeight`, and a fractional
+ * scroll can stop just short of it.
+ */
+export function referenceLine(
+  absTops: readonly number[],
+  y: number,
+  maxY: number,
+  near: number,
+  h: number,
+  slidePx: number,
+): number {
+  let deepest = -Infinity
+  let reachEnd = -Infinity
+  for (const abs of absTops) {
+    const atBottom = abs - maxY
+    if (atBottom > deepest) deepest = atBottom
+    if (atBottom <= near) reachEnd = Math.max(reachEnd, abs - near)
+  }
+  const yEnd = Math.max(near, Math.min(h, deepest) + 1)
+  const bottom = maxY - 1
+  const start = Math.max(0, maxY - slidePx, reachEnd)
+  if (yEnd <= near || start >= bottom) return y >= bottom ? yEnd : near
+  return near + (yEnd - near) * clamp01((y - start) / (bottom - start))
+}
+
+/**
  * The section id the spy would name for the current scroll position, or `''`
- * at the very top. The reference line sits just under the header for most of
- * the page; over a short window at the very bottom — where the page-end stops
- * the last sections from ever reaching it — it slides to the viewport bottom,
- * giving each a turn. Confining that slide to `slidePx` keeps a short page, or
- * a scroll well above the bottom, from mis-naming a section two below the one
- * actually in view.
+ * at the very top: the last section (document order) whose top is at or
+ * above the {@link referenceLine}.
  */
 export function sectionInView(ids: readonly string[], ref: Required<ReferenceLine>): string {
-  const off = ref.offset()
   const h = window.innerHeight
+  const y = window.scrollY
   const maxY = document.documentElement.scrollHeight - h
-  const near = off + Math.min(h * ref.nearFrac, ref.nearPx)
-  const descend = Math.min(h - near, maxY, ref.slidePx)
-  const progress = maxY > 0 ? clamp01((window.scrollY - (maxY - descend)) / descend) : 0
-  const yRef = near + (h - near) * progress
-  let cur = ''
+  const near = ref.offset() + Math.min(h * ref.nearFrac, ref.nearPx)
+  const tops: [string, number][] = []
   for (const id of ids) {
     const el = document.getElementById(id)
-    if (el && el.getBoundingClientRect().top <= yRef) cur = id
+    if (el) tops.push([id, el.getBoundingClientRect().top])
   }
-  return window.scrollY < ref.topPx ? '' : cur
+  const yRef = referenceLine(tops.map(([, top]) => top + y), y, maxY, near, h, ref.slidePx)
+  let cur = ''
+  for (const [id, top] of tops) if (top <= yRef) cur = id
+  return y < ref.topPx ? '' : cur
 }

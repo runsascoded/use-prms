@@ -16,7 +16,7 @@ import { navScroll, sectionInView, defaultReference, type NavScroll, type NavSec
 import { INPUT_EVENTS, isUserScroll, lastInputAt, markUserScroll, onInput, resetUserScroll } from './userScroll.js'
 
 export type { NavType, NavScroll, NavSection, ReferenceLine } from './nav.js'
-export { navScroll, sectionInView } from './nav.js'
+export { navScroll, sectionInView, referenceLine } from './nav.js'
 export { isUserScroll, resetUserScroll } from './userScroll.js'
 
 /** A location reduced to what the spy reads: the full URL parts + the history key. */
@@ -299,7 +299,15 @@ export function useSectionSpy(opts: SectionSpyOptions = {}): void {
   const nav = opts.nav ?? windowNav
   const { location, navType } = nav
 
-  const resolved = useMemo(() => resolveMode(opts.mode), [opts.mode])
+  // Keyed on the mode's fields, not its identity: an inline `mode: { kind: 'param' }`
+  // must not re-bind the scroll listeners every render.
+  const m = opts.mode
+  const p = m?.kind === 'param' ? m : undefined
+  const resolved = useMemo(
+    () => resolveMode(m),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [m?.kind, p?.key, p?.location, p?.adoptFragment, p?.encode, p?.decode],
+  )
   const mode = resolved.mode
   const write = opts.write ?? 'replace'
   const jumpWrite = opts.jumpWrite ?? 'replace'
@@ -405,20 +413,22 @@ export function useSectionSpy(opts: SectionSpyOptions = {}): void {
     const act = navScroll(from, next, navType, curLive, savedPosition(posCfg, k))
     prev.current = next
     keyRef.current = k
-    liveSection = next.section
-    publishSection(next.section)
     if (act.kind === 'none') {
-      // Reconcile: if the router carries a stale section, rewrite the URL back to live.
-      if (next.section !== liveSection) silentReplaceState(history.state, '', sectionUrl(mode, liveSection))
+      // The page doesn't move. A router navigation built from stale state (its
+      // own section, from before the reader scrolled) mustn't make the URL lie:
+      // rewrite it back to the live section. With `write: 'off'` the URL isn't
+      // the spy's to keep, so adopt the router's section instead.
+      if (write === 'off' || next.section === curLive) publishSection(next.section)
+      else silentReplaceState(history.state, '', sectionUrl(mode, curLive))
       return
     }
+    publishSection(next.section)
     resetUserScroll()
     target.current = act
     if (act.kind === 'top') {
       stopPursuit.current()
       window.scrollTo({ top: 0, behavior: 'instant' })
       publishSection('')
-      liveSection = ''
       if (next.section) silentReplaceState(history.state, '', sectionUrl(mode, ''))
       savePosition(posCfg, k, 0)
       return

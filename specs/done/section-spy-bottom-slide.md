@@ -1,6 +1,6 @@
 # Section spy: the bottom slide names a section early; dead reconcile; mode identity
 
-**Status:** proposed (from disky, 2026-10-19). **Scope:** `src/sections/nav.ts` `sectionInView`, `src/sections/spy.tsx`. Found while adopting `use-prms/sections` in disky (its spec `specs/done/use-prms-sections.md`). disky reports: "the spy was jumping ahead to e.g. diff when over-time was still not even at top of screen".
+**Status:** done 2026-10-19 (see [Implementation](#implementation)); proposed by disky the same day. **Scope:** `src/sections/nav.ts` `sectionInView`, `src/sections/spy.tsx`. Found while adopting `use-prms/sections` in disky (its spec `specs/done/use-prms-sections.md`). disky reports: "the spy was jumping ahead to e.g. diff when over-time was still not even at top of screen".
 
 ## 1. The bottom slide names the next section while the current one is far below the header
 
@@ -80,3 +80,17 @@ disky works around it by stripping the section (`withoutSection`) from its own r
 ## 3. `mode` is compared by identity
 
 `useMemo(() => resolveMode(opts.mode), [opts.mode])`, plus the scroll effect's `[mode, write]` deps, mean an inline `mode: { kind: 'param' }` (the README / spec's own example) produces a new resolved mode every render. That tears down and re-adds the scroll and input listeners, and resets `lastH` and `history.scrollRestoration`, on every render of the host component. On disky's home page that is many renders per data load. disky passes a module constant. Fix: key the memo on the mode's fields (`kind`, `key`, `location`, `adoptFragment`; `encode`/`decode` by identity), or document "pass a stable `mode`". The first is better: the obvious inline usage should be correct.
+
+## Implementation <a id="implementation"></a>
+
+All three items landed as proposed, with these deltas:
+
+- **(1) Slide:** pulled out as a pure, exported `referenceLine(absTops, y, maxY, near, h, slidePx)` in `nav.ts` (re-exported from `use-prms/sections`). `sectionInView` measures tops once and delegates. One deviation: **scrollY within 1 px of `maxY` counts as the bottom**, so the slide runs over `[slideStart, maxY − 1]`. `maxY` comes from the integer-rounded `scrollHeight`, and a fractional scroll (DPR / zoom) can stop just short of it. At ~3.3 px of line per px of scroll, a 0.3 px shortfall would otherwise mean the last section is never named. So the repro's transitions are `['0:', '40:tree-map', '547:tbl', '756:over-time', '824:diff']`. `tbl` is at 547 rather than 546 because the old rule's slide, which started at 545, named it 1 px early. Against the old `nav.ts`, the same test yields exactly disky's measured `546:tbl 593:over-time 660:diff`.
+  - Known trade-off: when the last reachable section reaches `near` just before `maxY`, the unreachable sections below it share a short slide. Each still gets a turn, in order. They're all on screen at that point, so naming one early would be worse.
+- **(2) Reconcile:** on `none` with `next.section !== live`, the URL is rewritten to `live`, and `live` is kept. **Except with `write: 'off'`**: the URL isn't the spy's to keep there, so the router's section is adopted, as before. Also fixed in the same block: `liveSection = x` ran right before `publishSection(x)`, which returns early when the value is unchanged, so **`useSectionInView` subscribers were never notified of a navigation-driven section change**. The direct assignments are gone; `publishSection` is the only writer.
+- **(3) Mode identity:** the resolved-mode memo is keyed on `kind`, `key`, `location`, `adoptFragment`, and `encode` / `decode` (the last two by identity).
+
+Tests (each new one TFFP'd: it fails on the pre-fix code):
+
+- `nav.test.ts`: a `transitions()` helper, with exact lists for the disky repro, three short trailing sections, and the no-slide page; `referenceLine` unit cases, including the sub-pixel bottom. The existing mid-slide case changes from `b` to `a`, because the line now ends at the deepest top + 1 (711), not the viewport bottom (900).
+- `spy.test.tsx`: stale same-path navigation rewrites to live; `write: 'off'` adopts the router's section; a memoized `useSectionInView` reader is notified on navigation; an inline `mode` literal binds the scroll listener once across re-renders.

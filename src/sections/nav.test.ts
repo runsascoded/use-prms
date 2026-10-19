@@ -2,7 +2,7 @@
  * @vitest-environment happy-dom
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { navScroll, sectionInView, defaultReference, type NavSection } from './nav.js'
+import { navScroll, sectionInView, referenceLine, defaultReference, type NavSection } from './nav.js'
 import { isUserScroll, resetUserScroll } from './userScroll.js'
 
 const sec = (pathname: string, section = '', key = 'k0'): NavSection => ({ pathname, section, key })
@@ -105,9 +105,80 @@ describe('sectionInView', () => {
   })
 
   it('mid-slide names the section the sliding line has reached', () => {
-    // scrollY 1960 → progress 0.5 → yRef 525. a(400),b(500)≤525<c(850).
+    // None of a/b/c reaches near=150 (tops at maxY 2100: 260, 360, 710), so the
+    // slide spans scrollY 1820 → 2099 and ends at 711 (c's top + 1). At 1960,
+    // progress 140/279 → yRef ≈ 431: a(400) ≤ 431 < b(500).
     stubGeometry(900, 3000, 1960, { a: 400, b: 500, c: 850 })
-    expect(sectionInView(ids, defaultReference)).toBe('b')
+    expect(sectionInView(ids, defaultReference)).toBe('a')
+  })
+})
+
+/** `"<scrollY>:<named>"` at each scrollY in `[0, maxY]` where the named section changes. */
+function transitions(
+  innerHeight: number,
+  scrollHeight: number,
+  absTops: Tops,
+  ref = defaultReference,
+): string[] {
+  const out: string[] = []
+  let last: string | undefined
+  for (let y = 0; y <= scrollHeight - innerHeight; y++) {
+    vi.restoreAllMocks()
+    stubGeometry(innerHeight, scrollHeight, y, Object.fromEntries(Object.entries(absTops).map(([id, t]) => [id, t - y])))
+    const s = sectionInView(Object.keys(absTops), ref)
+    if (s !== last) out.push(`${y}:${s}`)
+    last = s
+  }
+  return out
+}
+
+describe('sectionInView bottom slide', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('disky home page: a section reaching the line on its own is named only when it does', () => {
+    // vh 1188, header 76 → near 226; maxY 825. `diff` (top 452 at maxY) can't
+    // reach the line; `over-time` (157 at maxY) reaches it at scrollY 756. The
+    // old rule (slide to the viewport bottom from 545) named over-time at 593
+    // and diff at 660, with over-time's top still 322px down the screen.
+    const ref = { ...defaultReference, offset: () => 76 }
+    expect(transitions(1188, 2013, { 'tree-map': 98, tbl: 773, 'over-time': 982, diff: 1277 }, ref)).toEqual([
+      '0:',
+      '40:tree-map',
+      '547:tbl',
+      '756:over-time',
+      '824:diff',
+    ])
+  })
+
+  it('short trailing sections that never reach the line each get a turn, in order, the last at the bottom', () => {
+    // vh 900 → near 150; maxY 2100. b/c/d sit at 300/450/600 at maxY.
+    expect(transitions(900, 3000, { a: 1000, b: 2400, c: 2550, d: 2700 })).toEqual([
+      '0:',
+      '850:a',
+      '1985:b',
+      '2042:c',
+      '2099:d',
+    ])
+  })
+
+  it('no slide when every section reaches the line: each is named exactly as its top meets it', () => {
+    expect(transitions(900, 3000, { a: 500, b: 1200, c: 2000 })).toEqual([
+      '0:',
+      '350:a',
+      '1050:b',
+      '1850:c',
+    ])
+  })
+})
+
+describe('referenceLine', () => {
+  it('stays at near when every section reaches it', () => {
+    expect(referenceLine([500, 1200, 2000], 2100, 2100, 150, 900, 280)).toBe(150)
+  })
+
+  it('ends 1px past the deepest top at the bottom (1px short of maxY counts as the bottom)', () => {
+    expect(referenceLine([1000, 2400, 2700], 2099, 2100, 150, 900, 280)).toBe(601)
+    expect(referenceLine([1000, 2400, 2700], 2099.4, 2100, 150, 900, 280)).toBe(601)
   })
 })
 

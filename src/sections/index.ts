@@ -14,6 +14,7 @@ export {
   // Pure, exported for tests and custom spies:
   navScroll,
   sectionInView,
+  referenceLine,
   isUserScroll,
   resetUserScroll,
 } from './spy.js'

@@ -2,9 +2,11 @@
  * @vitest-environment happy-dom
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { renderHook, render } from '@testing-library/react'
+import { memo } from 'react'
+import { act, renderHook, render } from '@testing-library/react'
 import {
   useSectionSpy,
+  useSectionInView,
   jumpToSection,
   sectionHref,
   withoutSection,
@@ -130,5 +132,68 @@ describe('fragment adoption (param mode)', () => {
     renderHook(() => useSectionSpy({ sections: ['sec-a'], mode: prefixed, nav: navAt({ hash: '#unknown' }) }))
     expect(window.location.hash).toBe('#unknown')
     expect(window.location.search).toBe('')
+  })
+})
+
+describe('same-path navigation from stale router state', () => {
+  const ids = ['sec-a', 'sec-b', 'sec-c']
+  // Load at `?s=b`, then the reader moves the live section to `c` without the
+  // router seeing (a jump writes silently, as a reader scroll does).
+  function loadThenMoveToC(write: 'replace' | 'off') {
+    window.history.replaceState({}, '', '/?s=b')
+    addSections(ids)
+    const hook = renderHook(
+      ({ nav }) => { useSectionSpy({ sections: ids, mode: prefixed, write, nav }); return useSectionInView() },
+      { initialProps: { nav: navAt({ search: '?s=b' }) } },
+    )
+    act(() => jumpToSection('sec-c'))
+    expect(window.location.search).toBe('?s=c')
+    return hook
+  }
+
+  it('a navigation carrying the stale section rewrites the URL back to the live one', () => {
+    const { result, rerender } = loadThenMoveToC('replace')
+    // e.g. `navigate({ search })` built from the router's (stale) `?s=b`.
+    window.history.replaceState(window.history.state, '', '/?s=b')
+    rerender({ nav: navAt({ search: '?s=b', key: 'k1', navType: 'PUSH' }) })
+    expect(window.location.search).toBe('?s=c')
+    expect(result.current).toBe('sec-c')
+  })
+
+  it('with write: "off", the router\'s section is adopted (the URL is not the spy\'s)', () => {
+    const { result, rerender } = loadThenMoveToC('off')
+    window.history.replaceState(window.history.state, '', '/?s=b')
+    rerender({ nav: navAt({ search: '?s=b', key: 'k1', navType: 'PUSH' }) })
+    expect(window.location.search).toBe('?s=b')
+    expect(result.current).toBe('sec-b')
+  })
+})
+
+describe('useSectionInView subscribers', () => {
+  it('are notified when a navigation changes the section', () => {
+    window.history.replaceState({}, '', '/?s=a')
+    addSections(['sec-a', 'sec-b'])
+    const seen: string[] = []
+    // Memoized with no props: it re-renders only via its store subscription.
+    const Reader = memo(function Reader() { seen.push(useSectionInView()); return null })
+    function Host({ nav }: { nav: NavSource }) {
+      useSectionSpy({ sections: ['sec-a', 'sec-b'], mode: prefixed, nav })
+      return <Reader />
+    }
+    const { rerender } = render(<Host nav={navAt({ search: '?s=a' })} />)
+    window.history.replaceState(window.history.state, '', '/?s=b')
+    rerender(<Host nav={navAt({ search: '?s=b', key: 'k1', navType: 'PUSH' })} />)
+    expect(seen[seen.length - 1]).toBe('sec-b')
+  })
+})
+
+describe('mode identity', () => {
+  it('an inline mode literal binds the scroll listener once across re-renders', () => {
+    addSections(['sec-a'])
+    const add = vi.spyOn(window, 'addEventListener')
+    const { rerender } = renderHook(() => useSectionSpy({ sections: ['sec-a'], mode: { kind: 'param', key: 's' }, nav: navAt() }))
+    rerender()
+    rerender()
+    expect(add.mock.calls.filter(([type]) => type === 'scroll').length).toBe(1)
   })
 })
